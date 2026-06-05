@@ -113,6 +113,70 @@ def render_account_usage_lines(snapshot: Optional[AccountUsageSnapshot], *, mark
     return lines
 
 
+def _fmt_usd(d: float) -> str:
+    return f"${d:,.2f}"
+
+
+def build_nous_credits_snapshot(account_info) -> Optional[AccountUsageSnapshot]:
+    """Map a NousPortalAccountInfo into an AccountUsageSnapshot for /usage.
+
+    Magnitudes-only (v1): dollar buckets + renewal date + portal CTA. NO percentages
+    (the account endpoint has no monthlyCredits denominator). Returns None when there's
+    no usable account info to show (fail-open: caller just shows nothing).
+    """
+    try:
+        from hermes_cli.nous_account import nous_portal_billing_url
+
+        if account_info is None or not getattr(account_info, "logged_in", False):
+            return None
+
+        access = getattr(account_info, "paid_service_access_info", None)
+        sub = getattr(account_info, "subscription", None)
+
+        details: list[str] = []
+
+        if access is not None:
+            sub_credits = getattr(access, "subscription_credits_remaining", None)
+            if isinstance(sub_credits, (int, float)):
+                details.append(f"Subscription credits: {_fmt_usd(sub_credits)}")
+            purchased = getattr(access, "purchased_credits_remaining", None)
+            if isinstance(purchased, (int, float)):
+                details.append(f"Top-up credits: {_fmt_usd(purchased)}")
+            total_usable = getattr(access, "total_usable_credits", None)
+            if isinstance(total_usable, (int, float)):
+                details.append(f"Total usable: {_fmt_usd(total_usable)}")
+
+        if sub is not None:
+            rollover = getattr(sub, "rollover_credits", None)
+            if isinstance(rollover, (int, float)) and rollover > 0:
+                details.append(f"Rollover: {_fmt_usd(rollover)}")
+            period_end = getattr(sub, "current_period_end", None)
+            if period_end:
+                details.append(f"Renews: {period_end}")
+
+        paid = getattr(account_info, "paid_service_access", None)
+        if paid is False:
+            details.append("Status: access depleted — top up to restore")
+
+        if not details:
+            return None
+
+        details.append(f"Manage / top up: {nous_portal_billing_url(account_info)}")
+
+        plan = getattr(sub, "plan", None) if sub is not None else None
+        return AccountUsageSnapshot(
+            provider="nous",
+            source="portal-account",
+            fetched_at=_utc_now(),
+            title="Nous credits",
+            plan=plan,
+            windows=(),
+            details=tuple(details),
+        )
+    except (AttributeError, TypeError):
+        return None
+
+
 def _resolve_codex_usage_url(base_url: str) -> str:
     normalized = (base_url or "").strip().rstrip("/")
     if not normalized:

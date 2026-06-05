@@ -10620,6 +10620,54 @@ class HermesCLI:
             for line in account_lines:
                 print(line)
 
+        # ── Nous credits magnitudes (L6) ────────────────────────────
+        # Nous-native data, rendered through the same machinery but sourced
+        # from the portal account (NOT fetch_account_usage — that path is
+        # per-provider and Nous credits live elsewhere). Magnitudes-only:
+        # dollar buckets + renewal + a portal CTA, no percentages.
+        if (provider or "").lower() == "nous":
+            try:
+                from hermes_cli.nous_account import get_nous_portal_account_info
+                from agent.account_usage import build_nous_credits_snapshot
+
+                # force_fresh hits /api/oauth/account so the figures + the
+                # recovery check below see the live entitlement, not a stale
+                # JWT snapshot. Kept in a SEPARATE local — we must never
+                # clobber agent._credits_state with this magnitudes-only
+                # account fetch (it lacks subscription_limit_micros, which
+                # would drop used_fraction and spuriously clear the 90%
+                # notice). The header-sourced state stays authoritative.
+                nous_account = get_nous_portal_account_info(force_fresh=True)
+                credits_snapshot = build_nous_credits_snapshot(nous_account)
+                credits_lines = [
+                    f"  {line}" for line in render_account_usage_lines(credits_snapshot)
+                ]
+                if credits_lines:
+                    print()
+                    for line in credits_lines:
+                        print(line)
+
+                # /usage doubles as a depletion-recovery trigger: if paid
+                # access came back while a credits.depleted notice is latched,
+                # re-running the policy clears it (+ shows the restored line).
+                # Only when a notice consumer is bound (messaging binds none);
+                # reuse the shared policy/latch rather than re-implementing.
+                if (
+                    getattr(agent, "notice_clear_callback", None) is not None
+                    and getattr(nous_account, "paid_service_access", None) is True
+                ):
+                    try:
+                        agent._emit_credits_notices()
+                    except Exception:
+                        logging.getLogger(__name__).debug(
+                            "credits recovery emit failed", exc_info=True
+                        )
+            except Exception:
+                # Fail-open: a portal hiccup must never break /usage.
+                logging.getLogger(__name__).debug(
+                    "nous credits /usage block failed", exc_info=True
+                )
+
         if self.verbose:
             logging.getLogger().setLevel(logging.DEBUG)
             for noisy in ('openai', 'openai._base_client', 'httpx', 'httpcore', 'asyncio', 'hpack', 'grpc', 'modal'):

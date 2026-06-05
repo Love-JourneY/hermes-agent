@@ -14063,6 +14063,7 @@ class GatewayRunner:
         # Fetch account usage off the event loop so slow provider APIs don't
         # block the gateway. Failures are non-fatal -- account_lines stays [].
         account_lines: list[str] = []
+        credits_lines: list[str] = []
         if provider:
             try:
                 account_snapshot = await asyncio.to_thread(
@@ -14075,6 +14076,27 @@ class GatewayRunner:
                 account_snapshot = None
             if account_snapshot:
                 account_lines = render_account_usage_lines(account_snapshot, markdown=True)
+
+            # ── Nous credits magnitudes (L6) ────────────────────────
+            # Nous-native data via the portal account, NOT fetch_account_usage
+            # (per-provider boundary). Magnitudes-only: dollar buckets +
+            # renewal + portal CTA, no percentages. NO recovery trigger here:
+            # messaging binds no notice consumer (Q2), so /usage only displays.
+            if (provider or "").lower() == "nous":
+                try:
+                    from hermes_cli.nous_account import get_nous_portal_account_info
+                    from agent.account_usage import build_nous_credits_snapshot
+
+                    nous_account = await asyncio.to_thread(
+                        get_nous_portal_account_info, force_fresh=True
+                    )
+                    credits_snapshot = build_nous_credits_snapshot(nous_account)
+                    if credits_snapshot:
+                        credits_lines = render_account_usage_lines(
+                            credits_snapshot, markdown=True
+                        )
+                except Exception:
+                    credits_lines = []  # fail-open: never break /usage
 
         if agent and hasattr(agent, "session_total_tokens") and agent.session_api_calls > 0:
             lines = []
@@ -14136,6 +14158,9 @@ class GatewayRunner:
             if account_lines:
                 lines.append("")
                 lines.extend(account_lines)
+            if credits_lines:
+                lines.append("")
+                lines.extend(credits_lines)
 
             return "\n".join(lines)
 
@@ -14155,9 +14180,18 @@ class GatewayRunner:
             if account_lines:
                 lines.append("")
                 lines.extend(account_lines)
+            if credits_lines:
+                lines.append("")
+                lines.extend(credits_lines)
             return "\n".join(lines)
-        if account_lines:
-            return "\n".join(account_lines)
+        if account_lines or credits_lines:
+            # account-only, credits-only, or both — joined with a blank divider.
+            parts = list(account_lines)
+            if credits_lines:
+                if parts:
+                    parts.append("")
+                parts.extend(credits_lines)
+            return "\n".join(parts)
         return t("gateway.usage.no_data")
 
     async def _handle_insights_command(self, event: MessageEvent) -> str:
