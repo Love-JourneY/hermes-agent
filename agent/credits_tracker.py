@@ -39,6 +39,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
+from utils import is_truthy_value
+
 logger = logging.getLogger(__name__)
 
 # Warn-once latch: emit the version-unsupported warning at most once per process.
@@ -201,7 +203,7 @@ def evaluate_credits_notices(
 ) -> tuple[list[AgentNotice], list[str]]:
     """Reconcile credits notices against the latch. Mutates ``latch`` IN PLACE.
 
-    latch = {"active": set[str], "seen_below_90": bool}.
+    latch = {"active": set[str], "seen_below_90": bool, "usage_band": Optional[int]}.
 
     Returns ``(to_show: list[AgentNotice], to_clear: list[str])``.
     Caller emits to_clear FIRST, then to_show.
@@ -219,7 +221,7 @@ def evaluate_credits_notices(
     # seed primes this explicitly when it WANTS an open-high warning).
     _lowest_band = CREDITS_USAGE_BANDS[0][0]
     if uf is not None and uf < _lowest_band:
-        latch["seen_below_90"] = True  # field name kept for back-compat across call sites
+        latch["seen_below_90"] = True  # gate opened: usage-band notices may now fire
 
     active = latch["active"]
 
@@ -337,6 +339,13 @@ def parse_credits_headers(
     global _version_warning_emitted
 
     try:
+        # Cheap probe before the full lowercase copy: bail when the version
+        # sentinel header is absent (the common case for non-Nous providers, on
+        # every API call) — skips allocating a dict over the whole response's
+        # headers on the hot path, while preserving case-insensitivity. Behaviour
+        # is identical: a missing version header was already a None return below.
+        if not any(k.lower() == "x-nous-credits-version" for k in headers):
+            return None
         # Normalize to lowercase so lookups work regardless of how the server
         # capitalises headers (HTTP header names are case-insensitive per RFC 7230).
         lowered = {k.lower(): v for k, v in headers.items()}
@@ -349,15 +358,13 @@ def parse_credits_headers(
         version_val = _safe_int(version_raw)
         if version_val is _SENTINEL:
             return None
-        if version_val > 1:
-            if not _version_warning_emitted:
+        if version_val != 1:
+            if version_val > 1 and not _version_warning_emitted:
                 _version_warning_emitted = True
                 logger.warning(
                     "credits header version %d unsupported, ignoring — update Hermes",
                     version_val,
                 )
-            return None
-        if version_val != 1:
             return None
 
         # ── Helper: parse a required non-negative int field (fail → None) ───
@@ -494,6 +501,10 @@ def parse_credits_headers(
         )
 
     except Exception:
+        # Fail-open → miss, but leave a breadcrumb so a parser/import regression
+        # (feature silently dead) is distinguishable from a legitimate no-headers
+        # response in agent.log, without needing a dev flag.
+        logger.debug("credits ▸ parse_credits_headers raised (fail-open miss)", exc_info=True)
         return None
 
 
@@ -566,7 +577,14 @@ def dev_fixture_credits_state() -> Optional[CreditsState]:
     The env value is a state name, OR a path to a file whose contents are a state
     name (re-read each call → flip states live without a restart). Unknown name /
     "clear" / "none" / unset → None (normal behaviour). Throwaway test scaffolding.
+
+    Hard prod-leak guard: a fixture applies ONLY when the dev flag HERMES_DEV_CREDITS
+    is also on, so a stray HERMES_DEV_CREDITS_FIXTURE (leaked into a shell profile, a
+    container env, a launch plist, …) can never surface fabricated balances/notices
+    on a real account.
     """
+    if not is_truthy_value(os.environ.get("HERMES_DEV_CREDITS")):
+        return None
     raw = os.environ.get("HERMES_DEV_CREDITS_FIXTURE", "").strip()
     if not raw:
         return None
@@ -580,7 +598,73 @@ def dev_fixture_credits_state() -> Optional[CreditsState]:
     spec = _DEV_FIXTURES.get(name.lower())
     if not spec:
         return None
-    return CreditsState(**spec, from_header=True, captured_at=time.time())
+    # Stamp the fields the REAL parser always guarantees, so a fixture state is
+    # field-identical to a parse_credits_headers() result from equivalent headers
+    # (verified by the differential test): version is always 1, and purchased_usd
+    # is always a valid usd string (the parser rejects a missing/empty one, so a
+    # real zero-top-up account still carries "0.00"). Specs may override these.
+    merged = {"version": 1, "purchased_usd": "0.00", **spec}
+    return CreditsState(**merged, from_header=True, captured_at=time.time())
+
+
+def _credits_state_from_account(info) -> Optional[CreditsState]:
+    """Map a NousPortalAccountInfo into a header-shaped CreditsState for the seed.
+
+    Float account dollars → micros (plus a DISPLAY *_usd string — allowed, since
+    we're formatting account floats, NOT parsing a server-provided *_usd). Returns
+    None if the account can't yield a usable state (fail-open)."""
+    try:
+        _acc = getattr(info, "paid_service_access_info", None)
+        _sub = getattr(info, "subscription", None)
+
+        def _to_micros(dollars):
+            return int(round(dollars * 1_000_000)) if isinstance(dollars, (int, float)) else 0
+
+        def _to_usd(dollars):
+            # DISPLAY formatting of an account float (not a server *_usd string);
+            # "" when absent so render/notice copy falls back gracefully.
+            return f"{dollars:.2f}" if isinstance(dollars, (int, float)) else ""
+
+        _monthly = getattr(_sub, "monthly_credits", None)
+        _has_cap = isinstance(_monthly, (int, float)) and _monthly > 0
+        _paid = getattr(info, "paid_service_access", None)
+        return CreditsState(
+            remaining_micros=_to_micros(getattr(_acc, "total_usable_credits", None)),
+            remaining_usd=_to_usd(getattr(_acc, "total_usable_credits", None)),
+            subscription_micros=_to_micros(getattr(_acc, "subscription_credits_remaining", None)),
+            subscription_usd=_to_usd(getattr(_acc, "subscription_credits_remaining", None)),
+            subscription_limit_micros=_to_micros(_monthly) if _has_cap else None,
+            subscription_limit_usd=_to_usd(_monthly) if _has_cap else None,
+            purchased_micros=_to_micros(getattr(_acc, "purchased_credits_remaining", None)),
+            purchased_usd=_to_usd(getattr(_acc, "purchased_credits_remaining", None)),
+            rollover_micros=_to_micros(getattr(_sub, "rollover_credits", None)),
+            denominator_kind="subscription_cap" if _has_cap else "none",
+            paid_access=_paid if isinstance(_paid, bool) else True,
+            from_header=False,
+            captured_at=time.time(),
+        )
+    except Exception:
+        logger.debug("credits ▸ seed account→state mapping failed", exc_info=True)
+        return None
+
+
+def _hydrate_seed_state(agent, state) -> None:
+    """Install a seed CreditsState on the agent and fire the notice policy once.
+
+    Sets _credits_state, latches session-start remaining, and primes the crossing
+    gate (the cold-start snapshot IS the first observation, so a session that opens
+    already in a band warns immediately — the live header path keeps true crossing
+    semantics), then emits. Safe to call from a worker thread: emit already runs
+    off-thread in the TUI build path."""
+    agent._credits_state = state
+    if getattr(agent, "_credits_session_start_micros", None) is None:
+        agent._credits_session_start_micros = state.remaining_micros
+    _latch = getattr(agent, "_credits_latch", None)
+    if isinstance(_latch, dict) and state.used_fraction is not None:
+        _latch["seen_below_90"] = True
+    emit = getattr(agent, "_emit_credits_notices", None)
+    if callable(emit):
+        emit()
 
 
 def seed_credits_at_session_start(agent) -> bool:
@@ -601,57 +685,39 @@ def seed_credits_at_session_start(agent) -> bool:
         # Idempotent: don't re-seed if state already exists (seed or live header).
         if getattr(agent, "_credits_state", None) is not None:
             return False
-        # Only meaningful when a notice consumer is bound (else nothing renders);
-        # still seed state so /usage etc. can read it, but skip the emit cost.
-        import concurrent.futures as _cf
-        from hermes_cli.nous_account import get_nous_portal_account_info
-
         fixture = None
         try:
             fixture = dev_fixture_credits_state()
         except Exception:
             fixture = None
-
         if fixture is not None:
-            agent._credits_state = fixture
-        else:
-            with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-                _info = _pool.submit(get_nous_portal_account_info, force_fresh=True).result(timeout=10.0)
-            _acc = getattr(_info, "paid_service_access_info", None)
-            _sub = getattr(_info, "subscription", None)
+            # Synchronous: a fixture is instant (no network), and tests rely on the
+            # state + notice landing before this returns.
+            _hydrate_seed_state(agent, fixture)
+            return True
 
-            def _to_micros(dollars):
-                return int(round(dollars * 1_000_000)) if isinstance(dollars, (int, float)) else 0
+        # Real portal fetch is FIRE-AND-FORGET: a slow/unreachable portal must never
+        # delay session "ready". A daemon thread hydrates + emits when it resolves,
+        # re-checking idempotency first (a live inference header may land before it).
+        import threading
 
-            _monthly = getattr(_sub, "monthly_credits", None)
-            _has_cap = isinstance(_monthly, (int, float)) and _monthly > 0
-            _paid = getattr(_info, "paid_service_access", None)
-            agent._credits_state = CreditsState(
-                remaining_micros=_to_micros(getattr(_acc, "total_usable_credits", None)),
-                subscription_micros=_to_micros(getattr(_acc, "subscription_credits_remaining", None)),
-                subscription_limit_micros=_to_micros(_monthly) if _has_cap else None,
-                purchased_micros=_to_micros(getattr(_acc, "purchased_credits_remaining", None)),
-                rollover_micros=_to_micros(getattr(_sub, "rollover_credits", None)),
-                denominator_kind="subscription_cap" if _has_cap else "none",
-                paid_access=_paid if isinstance(_paid, bool) else True,
-                from_header=False,
-                captured_at=time.time(),
-            )
+        def _bg_seed() -> None:
+            try:
+                from hermes_cli.nous_account import get_nous_portal_account_info
+                info = get_nous_portal_account_info(force_fresh=True)
+                if getattr(agent, "_credits_state", None) is not None:
+                    return  # a live inference header beat us — don't clobber it
+                state = _credits_state_from_account(info)
+                if state is not None:
+                    _hydrate_seed_state(agent, state)
+            except Exception:
+                logger.debug("credits ▸ session-start seed (background) failed", exc_info=True)
 
-        if getattr(agent, "_credits_session_start_micros", None) is None:
-            agent._credits_session_start_micros = agent._credits_state.remaining_micros
-
-        # At cold start the snapshot IS the first observation: prime the crossing
-        # gate so a session that opens already in a band warns immediately. The
-        # live header path keeps true crossing semantics.
-        _latch = getattr(agent, "_credits_latch", None)
-        if isinstance(_latch, dict) and agent._credits_state.used_fraction is not None:
-            _latch["seen_below_90"] = True
-
-        emit = getattr(agent, "_emit_credits_notices", None)
-        if callable(emit):
-            emit()
+        threading.Thread(target=_bg_seed, name="credits-seed", daemon=True).start()
         return True
     except Exception:
         # Fail-open: any auth/portal hiccup leaves _credits_state as-is, never blocks.
+        # Innermost log across all four call sites (TUI build / CLI build / first
+        # turn / desktop), so a dead session-open seed is diagnosable in agent.log.
+        logger.debug("credits ▸ session-start seed failed (fail-open)", exc_info=True)
         return False

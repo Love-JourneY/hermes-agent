@@ -107,6 +107,7 @@ def test_dev_fixtures_drive_cold_start():
         "depleted": ["credits.depleted"],
     }
     for name, want in expected.items():
+        os.environ["HERMES_DEV_CREDITS"] = "1"  # fixtures gate on the dev flag
         os.environ["HERMES_DEV_CREDITS_FIXTURE"] = name
         try:
             fx = dev_fixture_credits_state()
@@ -114,6 +115,7 @@ def test_dev_fixtures_drive_cold_start():
             assert _cold_start_notices(fx) == want, (name, _cold_start_notices(fx))
         finally:
             os.environ.pop("HERMES_DEV_CREDITS_FIXTURE", None)
+            os.environ.pop("HERMES_DEV_CREDITS", None)
 
 
 # ── seed_credits_at_session_start: the shared session-open hydrator ───────────
@@ -145,11 +147,13 @@ def _seed(agent, fixture):
 
     from agent.credits_tracker import seed_credits_at_session_start
 
+    os.environ["HERMES_DEV_CREDITS"] = "1"  # fixtures gate on the dev flag
     os.environ["HERMES_DEV_CREDITS_FIXTURE"] = fixture
     try:
         return seed_credits_at_session_start(agent)
     finally:
         os.environ.pop("HERMES_DEV_CREDITS_FIXTURE", None)
+        os.environ.pop("HERMES_DEV_CREDITS", None)
 
 
 def test_seed_fires_usage_band_at_session_open():
