@@ -1,6 +1,6 @@
 """Tests for evaluate_credits_notices — pure threshold reconciliation policy (L4.1).
 
-All tests use fresh latch = {"active": set(), "seen_below_90": False} per scenario.
+All tests use fresh latch = {"active": set(), "seen_below_90": False, "usage_band": None} per scenario.
 CreditsState is constructed directly (not parsed from headers).
 """
 
@@ -21,7 +21,7 @@ from agent.credits_tracker import (
 
 
 def fresh_latch() -> dict:
-    return {"active": set(), "seen_below_90": False}
+    return {"active": set(), "seen_below_90": False, "usage_band": None}
 
 
 def state_with_fraction(
@@ -67,36 +67,36 @@ def state_with_fraction(
 
 
 class TestWarn90Crossing:
-    def test_below_90_no_warn90_latch_set(self):
+    def test_below_lowest_band_no_notice_but_latch_set(self):
         latch = fresh_latch()
-        s = state_with_fraction(0.5)
+        s = state_with_fraction(0.10)  # below the 50% band
         to_show, to_clear = evaluate_credits_notices(s, latch)
-        assert all(n.key != "credits.warn90" for n in to_show)
-        assert "credits.warn90" not in to_clear
+        assert all(n.key != "credits.usage" for n in to_show)
+        assert "credits.usage" not in to_clear
         assert latch["seen_below_90"] is True
 
     def test_crossing_to_90_fires_once(self):
         latch = fresh_latch()
-        # First call: uf < 0.9 — sets seen_below_90
-        s1 = state_with_fraction(0.5)
+        # First call: uf < 0.5 — sets seen_below_90 (below lowest band)
+        s1 = state_with_fraction(0.10)
         evaluate_credits_notices(s1, latch)
-        # Second call: uf >= 0.9 — should fire warn90
+        # Second call: uf >= 0.9 — should fire the usage band at 90
         s2 = state_with_fraction(0.95)
         to_show, to_clear = evaluate_credits_notices(s2, latch)
         keys = [n.key for n in to_show]
-        assert "credits.warn90" in keys
-        assert "credits.warn90" not in to_clear
+        assert "credits.usage" in keys
+        assert "credits.usage" not in to_clear
 
     def test_no_refire_on_repeated_over_90(self):
         latch = fresh_latch()
-        s_below = state_with_fraction(0.5)
+        s_below = state_with_fraction(0.10)
         evaluate_credits_notices(s_below, latch)
         s_over = state_with_fraction(0.95)
         evaluate_credits_notices(s_over, latch)
         # Third call: still ≥ 0.9 — must NOT re-fire
         to_show, to_clear = evaluate_credits_notices(s_over, latch)
-        assert all(n.key != "credits.warn90" for n in to_show)
-        assert "credits.warn90" not in to_clear
+        assert all(n.key != "credits.usage" for n in to_show)
+        assert "credits.usage" not in to_clear
 
 
 # ── Scenario 2: recovery + re-cross ──────────────────────────────────────────
@@ -106,22 +106,22 @@ class TestWarn90RecoveryReCross:
     def test_recovery_clears_warn90(self):
         latch = fresh_latch()
         # Cross below → above
-        evaluate_credits_notices(state_with_fraction(0.5), latch)
+        evaluate_credits_notices(state_with_fraction(0.10), latch)
         evaluate_credits_notices(state_with_fraction(0.95), latch)
-        # Recovery: uf drops back below 0.9
-        to_show, to_clear = evaluate_credits_notices(state_with_fraction(0.5), latch)
-        assert "credits.warn90" in to_clear
-        assert "credits.warn90" not in latch["active"]
+        # Recovery: uf drops back below ALL bands → usage notice clears entirely
+        to_show, to_clear = evaluate_credits_notices(state_with_fraction(0.10), latch)
+        assert "credits.usage" in to_clear
+        assert "credits.usage" not in latch["active"]
 
     def test_recross_after_recovery_fires_again(self):
         latch = fresh_latch()
-        evaluate_credits_notices(state_with_fraction(0.5), latch)
+        evaluate_credits_notices(state_with_fraction(0.10), latch)
         evaluate_credits_notices(state_with_fraction(0.95), latch)
-        evaluate_credits_notices(state_with_fraction(0.5), latch)  # recovery
-        # Re-cross: uf >= 0.9 again — should fire again because latch is clearable
+        evaluate_credits_notices(state_with_fraction(0.10), latch)  # recovery
+        # Re-cross: uf >= 0.9 again — should fire again because the band is clearable
         to_show, to_clear = evaluate_credits_notices(state_with_fraction(0.95), latch)
         keys = [n.key for n in to_show]
-        assert "credits.warn90" in keys
+        assert "credits.usage" in keys
 
 
 # ── Scenario 3: open-already-over (hybrid Q3 gate) ───────────────────────────
@@ -134,8 +134,8 @@ class TestOpenAlreadyOver:
         assert latch["seen_below_90"] is False
         s = state_with_fraction(0.95)
         to_show, to_clear = evaluate_credits_notices(s, latch)
-        assert all(n.key != "credits.warn90" for n in to_show)
-        assert "credits.warn90" not in to_clear
+        assert all(n.key != "credits.usage" for n in to_show)
+        assert "credits.usage" not in to_clear
 
 
 # ── Scenario 3b: boundary — exact 0.9 and just-below-1.0 ────────────────────
@@ -145,8 +145,8 @@ class TestBoundaryFractions:
     def test_exact_0_9_fires_warn90(self):
         """used_fraction == 0.9 exactly must fire warn90 (threshold is inclusive)."""
         latch = fresh_latch()
-        # First: prime seen_below_90 with a sub-0.9 observation
-        evaluate_credits_notices(state_with_fraction(0.5), latch)
+        # First: prime seen_below_90 with a sub-50% observation
+        evaluate_credits_notices(state_with_fraction(0.10), latch)
         # Now construct a state where used_fraction is EXACTLY 0.9:
         # subscription_limit_micros=20_000_000, subscription_micros=2_000_000
         # → used = 18_000_000 / 20_000_000 = 0.9 exactly
@@ -160,8 +160,8 @@ class TestBoundaryFractions:
         assert s.used_fraction == 0.9
         to_show, to_clear = evaluate_credits_notices(s, latch)
         keys = [n.key for n in to_show]
-        assert "credits.warn90" in keys
-        assert "credits.warn90" not in to_clear
+        assert "credits.usage" in keys
+        assert "credits.usage" not in to_clear
 
     def test_just_below_1_0_does_not_fire_grant_spent(self):
         """subscription_micros = limit - 1 (used_fraction just under 1.0) must NOT fire grant_spent.
@@ -273,8 +273,8 @@ class TestDenominatorNone:
         latch = fresh_latch()
         s = state_with_fraction(None)
         to_show, to_clear = evaluate_credits_notices(s, latch)
-        assert all(n.key != "credits.warn90" for n in to_show)
-        assert "credits.warn90" not in to_clear
+        assert all(n.key != "credits.usage" for n in to_show)
+        assert "credits.usage" not in to_clear
 
     def test_no_grant_spent_when_uf_none(self):
         latch = fresh_latch()
@@ -290,15 +290,15 @@ class TestDenominatorNone:
     def test_warn90_clears_when_uf_becomes_none(self):
         """If warn90 was active and uf becomes None, it should clear."""
         latch = fresh_latch()
-        # Establish warn90 active: cross below → above
-        evaluate_credits_notices(state_with_fraction(0.5), latch)
+        # Establish usage notice active: cross below → above
+        evaluate_credits_notices(state_with_fraction(0.10), latch)
         evaluate_credits_notices(state_with_fraction(0.95), latch)
-        assert "credits.warn90" in latch["active"]
+        assert "credits.usage" in latch["active"]
         # Now uf becomes None (denominator changed to "none")
         s_none = state_with_fraction(None)
         to_show, to_clear = evaluate_credits_notices(s_none, latch)
-        assert "credits.warn90" in to_clear
-        assert "credits.warn90" not in latch["active"]
+        assert "credits.usage" in to_clear
+        assert "credits.usage" not in latch["active"]
 
 
 # ── Scenario 7: copy / verbatim USD strings ──────────────────────────────────
@@ -307,10 +307,10 @@ class TestDenominatorNone:
 class TestNoticeCopy:
     def test_warn90_contains_verbatim_subscription_limit_usd(self):
         latch = fresh_latch()
-        evaluate_credits_notices(state_with_fraction(0.5), latch)
+        evaluate_credits_notices(state_with_fraction(0.10), latch)
         s = state_with_fraction(0.95, subscription_limit_usd="20.00")
         to_show, _ = evaluate_credits_notices(s, latch)
-        warn_notice = next(n for n in to_show if n.key == "credits.warn90")
+        warn_notice = next(n for n in to_show if n.key == "credits.usage")
         assert "$20.00" in warn_notice.text
         assert "cap" in warn_notice.text
 
@@ -345,7 +345,7 @@ class TestSeverityOrder:
         # on first call (no latch state yet):
         # - warn90: uf >= 0.9 AND seen_below_90 must be True → won't fire fresh latch
         # So we pre-seed seen_below_90=True to allow warn90 to fire.
-        latch = {"active": set(), "seen_below_90": True}
+        latch = {"active": set(), "seen_below_90": True, "usage_band": None}
 
         # Build state: subscription_cap, uf >= 1.0, purchased_micros > 0, NOT paid_access
         # warn90_cond: uf >= 0.9 ✓ (uf=1.0)
@@ -362,11 +362,11 @@ class TestSeverityOrder:
         )
         to_show, _ = evaluate_credits_notices(s, latch)
         keys = [n.key for n in to_show]
-        assert "credits.warn90" in keys
+        assert "credits.usage" in keys
         assert "credits.grant_spent" in keys
         assert "credits.depleted" in keys
         # Ascending severity: warn90 before grant_spent before depleted
-        assert keys.index("credits.warn90") < keys.index("credits.grant_spent")
+        assert keys.index("credits.usage") < keys.index("credits.grant_spent")
         assert keys.index("credits.grant_spent") < keys.index("credits.depleted")
 
 
@@ -374,13 +374,13 @@ class TestSeverityOrder:
 
 
 class TestNoFireAndClearSameKey:
-    def test_warn90_never_both_fired_and_cleared(self):
+    def test_usage_never_both_fired_and_cleared(self):
         latch = fresh_latch()
         # Run many state transitions; across each, assert no key is in both lists
         states = [
-            state_with_fraction(0.5),
+            state_with_fraction(0.10),
             state_with_fraction(0.95),
-            state_with_fraction(0.5),
+            state_with_fraction(0.10),
             state_with_fraction(0.95),
             state_with_fraction(None),
         ]
@@ -404,3 +404,89 @@ class TestNoFireAndClearSameKey:
             cleared_keys = set(to_clear)
             overlap = fired_keys & cleared_keys
             assert not overlap, f"Key(s) both fired and cleared: {overlap}"
+
+
+# ── Scenario 9: escalating usage bands (50 → 75 → 90) ────────────────────────
+
+
+class TestUsageBands:
+    """The usage notice shows the HIGHEST crossed band as a single escalating line."""
+
+    def _band_text(self, to_show):
+        n = next((n for n in to_show if n.key == "credits.usage"), None)
+        return n.text if n else None
+
+    def test_50_band_fires_info(self):
+        latch = fresh_latch()
+        evaluate_credits_notices(state_with_fraction(0.10), latch)  # prime
+        to_show, _ = evaluate_credits_notices(state_with_fraction(0.55), latch)
+        n = next(n for n in to_show if n.key == "credits.usage")
+        assert "50%" in n.text and n.level == "info"
+        assert latch["usage_band"] == 50
+
+    def test_75_band_fires_warn(self):
+        latch = fresh_latch()
+        evaluate_credits_notices(state_with_fraction(0.10), latch)
+        to_show, _ = evaluate_credits_notices(state_with_fraction(0.80), latch)
+        n = next(n for n in to_show if n.key == "credits.usage")
+        assert "75%" in n.text and n.level == "warn"
+        assert latch["usage_band"] == 75
+
+    def test_climb_replaces_band(self):
+        """Climbing 50→75→90 replaces the single line (clear old + show new)."""
+        latch = fresh_latch()
+        evaluate_credits_notices(state_with_fraction(0.10), latch)
+        # 55% → 50 band
+        evaluate_credits_notices(state_with_fraction(0.55), latch)
+        assert latch["usage_band"] == 50
+        # 80% → climbs to 75, clearing the 50 line
+        to_show, to_clear = evaluate_credits_notices(state_with_fraction(0.80), latch)
+        assert "credits.usage" in to_clear
+        assert "75%" in self._band_text(to_show)
+        assert latch["usage_band"] == 75
+        # 95% → climbs to 90
+        to_show, to_clear = evaluate_credits_notices(state_with_fraction(0.95), latch)
+        assert "credits.usage" in to_clear
+        assert "90%" in self._band_text(to_show)
+        assert latch["usage_band"] == 90
+
+    def test_step_down_on_recovery(self):
+        """Recovering steps the band back down, then clears below the lowest band."""
+        latch = fresh_latch()
+        evaluate_credits_notices(state_with_fraction(0.10), latch)
+        evaluate_credits_notices(state_with_fraction(0.95), latch)
+        assert latch["usage_band"] == 90
+        # drop to 80% → steps down to 75
+        to_show, to_clear = evaluate_credits_notices(state_with_fraction(0.80), latch)
+        assert "credits.usage" in to_clear
+        assert "75%" in self._band_text(to_show)
+        # drop to 55% → steps down to 50
+        to_show, _ = evaluate_credits_notices(state_with_fraction(0.55), latch)
+        assert "50%" in self._band_text(to_show)
+        # drop below 50% → clears entirely
+        to_show, to_clear = evaluate_credits_notices(state_with_fraction(0.10), latch)
+        assert "credits.usage" in to_clear
+        assert latch["usage_band"] is None
+
+    def test_no_refire_same_band(self):
+        latch = fresh_latch()
+        evaluate_credits_notices(state_with_fraction(0.10), latch)
+        evaluate_credits_notices(state_with_fraction(0.80), latch)  # fires 75
+        # still 80% → same band, no re-emit, no clear
+        to_show, to_clear = evaluate_credits_notices(state_with_fraction(0.80), latch)
+        assert all(n.key != "credits.usage" for n in to_show)
+        assert "credits.usage" not in to_clear
+
+    def test_exact_band_boundaries_inclusive(self):
+        """Thresholds are inclusive: exactly 0.50 / 0.75 / 0.90 land in their band."""
+        for uf, want in [(0.50, 50), (0.75, 75), (0.90, 90)]:
+            latch = fresh_latch()
+            latch["seen_below_90"] = True  # allow firing
+            evaluate_credits_notices(state_with_fraction(uf), latch)
+            assert latch["usage_band"] == want, (uf, latch["usage_band"])
+
+    def test_open_below_lowest_band_no_notice(self):
+        latch = fresh_latch()
+        to_show, to_clear = evaluate_credits_notices(state_with_fraction(0.30), latch)
+        assert all(n.key != "credits.usage" for n in to_show)
+        assert latch["usage_band"] is None

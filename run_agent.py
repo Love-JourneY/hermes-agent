@@ -2818,7 +2818,7 @@ class AIAgent:
             from agent.credits_tracker import evaluate_credits_notices
             latch = getattr(self, "_credits_latch", None)
             if latch is None:
-                latch = self._credits_latch = {"active": set(), "seen_below_90": False}
+                latch = self._credits_latch = {"active": set(), "seen_below_90": False, "usage_band": None}
             to_show, to_clear = evaluate_credits_notices(state, latch)
             for key in to_clear:        # clears FIRST …
                 self._emit_notice_clear(key)

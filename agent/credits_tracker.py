@@ -156,6 +156,18 @@ class CreditsState:
 CREDITS_NOTICE_KIND = "sticky"      # v1: credits notices are sticky
 CREDITS_RESTORED_TTL_MS = 8000     # the only TTL notice in v1 (depletion-recovery confirmation)
 
+# Usage-gauge bands (ascending). Each is (threshold_fraction, level, label_pct).
+# The notice shows the HIGHEST band the current used_fraction has reached — a single
+# escalating status-bar line (50 → 75 → 90), not three stacked notices. Crossing the
+# next band up replaces the line; recovering below a band steps it back down. Edit
+# this list to retune the bands; the policy derives everything from it.
+CREDITS_USAGE_BANDS: tuple[tuple[float, str, int], ...] = (
+    (0.50, "info", 50),
+    (0.75, "warn", 75),
+    (0.90, "warn", 90),
+)
+CREDITS_USAGE_KEY = "credits.usage"  # single key for the escalating usage notice
+
 
 # ── AgentNotice (out-of-band notice payload; driver-agnostic) ────────────────
 
@@ -201,14 +213,23 @@ def evaluate_credits_notices(
 
     uf = state.used_fraction
 
-    # Update the crossing latch: once we've seen uf < 0.9, warn90 may fire later.
-    if uf is not None and uf < 0.9:
-        latch["seen_below_90"] = True
+    # Crossing latch: once we've observed uf below the LOWEST band, escalating
+    # usage notices may fire. This prevents a brand-new session that opens
+    # mid-range from firing spuriously on the first observation (the cold-start
+    # seed primes this explicitly when it WANTS an open-high warning).
+    _lowest_band = CREDITS_USAGE_BANDS[0][0]
+    if uf is not None and uf < _lowest_band:
+        latch["seen_below_90"] = True  # field name kept for back-compat across call sites
 
     active = latch["active"]
 
     # ── Conditions ───────────────────────────────────────────────────────────
-    warn90_cond = uf is not None and uf >= 0.9
+    # Highest band whose threshold the current usage has reached (None below all).
+    current_band: Optional[tuple[float, str, int]] = None
+    if uf is not None:
+        for band in CREDITS_USAGE_BANDS:  # ascending → last match wins = highest
+            if uf >= band[0]:
+                current_band = band
     grant_cond = (
         state.denominator_kind == "subscription_cap"
         and uf is not None
@@ -217,26 +238,32 @@ def evaluate_credits_notices(
     )
     depleted_cond = not state.paid_access
 
-    # ── warn90 ───────────────────────────────────────────────────────────────
-    if warn90_cond and latch["seen_below_90"] and "credits.warn90" not in active:
-        # Belt-and-suspenders: parse_credits_headers always pairs the two limit
-        # fields today, but a future producer (e.g. L3 cold-start seed) could set
-        # subscription_limit_micros without subscription_limit_usd.  Render "$? cap"
-        # rather than "$None cap" in that case.
-        _cap_usd = state.subscription_limit_usd or "?"
-        to_show.append(
-            AgentNotice(
-                text=f"⚠ Credits 90% used · ${_cap_usd} cap",
-                level="warn",
-                kind=CREDITS_NOTICE_KIND,
-                key="credits.warn90",
-                id="credits.warn90",
+    # ── usage gauge (escalating single notice: 50 → 75 → 90) ──────────────────
+    # Show only the highest crossed band; replace the line when the band changes
+    # (climb or step-down on recovery); clear entirely when usage drops below the
+    # lowest band or the denominator disappears (uf is None).
+    shown_band = latch.get("usage_band")  # the pct label currently displayed, or None
+    target_band = current_band[2] if (current_band and latch["seen_below_90"]) else None
+    if target_band != shown_band:
+        if CREDITS_USAGE_KEY in active:
+            to_clear.append(CREDITS_USAGE_KEY)
+            active.discard(CREDITS_USAGE_KEY)
+        if target_band is not None:
+            # Belt-and-suspenders: a producer could set subscription_limit_micros
+            # without subscription_limit_usd. Render "$? cap" rather than "$None cap".
+            _cap_usd = state.subscription_limit_usd or "?"
+            _level = current_band[1]  # type: ignore[index]  (current_band set when target_band set)
+            to_show.append(
+                AgentNotice(
+                    text=f"{'⚠' if _level == 'warn' else '•'} Credits {target_band}% used · ${_cap_usd} cap",
+                    level=_level,
+                    kind=CREDITS_NOTICE_KIND,
+                    key=CREDITS_USAGE_KEY,
+                    id=CREDITS_USAGE_KEY,
+                )
             )
-        )
-        active.add("credits.warn90")
-    elif "credits.warn90" in active and not warn90_cond:
-        to_clear.append("credits.warn90")
-        active.discard("credits.warn90")
+            active.add(CREDITS_USAGE_KEY)
+        latch["usage_band"] = target_band
 
     # ── grant_spent ──────────────────────────────────────────────────────────
     if grant_cond and "credits.grant_spent" not in active:
@@ -475,8 +502,14 @@ def parse_credits_headers(
 # without real spend or Redis seeding. Set HERMES_DEV_CREDITS_FIXTURE to either a
 # state NAME (fixed for the session) or a FILE PATH whose contents are a state
 # name (re-read every turn → flip states live: `echo depleted > /tmp/cf`, take a
-# turn; `echo healthy > /tmp/cf`, take a turn → recovery). Delete with the rest
-# of the HERMES_DEV_CREDITS scaffolding.
+# turn; `echo healthy > /tmp/cf`, take a turn → recovery).
+#
+# A fixture drives THREE surfaces uniformly, so the whole credits UX is testable
+# offline: (1) the per-turn capture/notice path (_capture_credits), (2) the
+# cold-start seed at session open (conversation_loop → depletion/warn90 hydrate
+# immediately), and (3) the /usage view (nous_credits_lines renders the fixture).
+# `clear` / `none` / unset → real behaviour. Delete with the rest of the
+# HERMES_DEV_CREDITS scaffolding.
 _DEV_FIXTURES: dict[str, dict] = {
     "healthy": dict(  # used_fraction ~0.1, paid → no notice (recovery target)
         remaining_micros=30_340_000, remaining_usd="30.34",
@@ -504,6 +537,14 @@ _DEV_FIXTURES: dict[str, dict] = {
         purchased_micros=0, purchased_usd="0.00",
         paid_access=False, disabled_reason="out_of_credits",
     ),
+    "debt": dict(  # subscription in debt (negative, the only signed field) → depleted
+        remaining_micros=0, remaining_usd="0.00",
+        subscription_micros=-5_000_000, subscription_usd="-5.00",
+        subscription_limit_micros=20_000_000, subscription_limit_usd="20.00",
+        purchased_micros=0, purchased_usd="0.00",
+        denominator_kind="subscription_cap", paid_access=False,
+        disabled_reason="out_of_credits",
+    ),
 }
 
 
@@ -528,3 +569,77 @@ def dev_fixture_credits_state() -> Optional[CreditsState]:
     if not spec:
         return None
     return CreditsState(**spec, from_header=True, captured_at=time.time())
+
+
+def seed_credits_at_session_start(agent) -> bool:
+    """Hydrate agent._credits_state from /api/oauth/account (or a dev fixture) and
+    fire the notice policy, so depletion / usage-band warnings show at session OPEN.
+
+    Shared by (a) the TUI/desktop agent build (fires at "ready", before any message)
+    and (b) the first-turn conversation setup (fallback for plain CLI / when the
+    build path didn't seed). Idempotent: a second call is a no-op once a seed or a
+    real header has already populated _credits_state.
+
+    Returns True if it seeded this call, False otherwise (not nous / already seeded /
+    fail-open error). Never raises — credits must never block session startup.
+    """
+    try:
+        if getattr(agent, "provider", "") != "nous":
+            return False
+        # Idempotent: don't re-seed if state already exists (seed or live header).
+        if getattr(agent, "_credits_state", None) is not None:
+            return False
+        # Only meaningful when a notice consumer is bound (else nothing renders);
+        # still seed state so /usage etc. can read it, but skip the emit cost.
+        import concurrent.futures as _cf
+        from hermes_cli.nous_account import get_nous_portal_account_info
+
+        fixture = None
+        try:
+            fixture = dev_fixture_credits_state()
+        except Exception:
+            fixture = None
+
+        if fixture is not None:
+            agent._credits_state = fixture
+        else:
+            with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+                _info = _pool.submit(get_nous_portal_account_info, force_fresh=True).result(timeout=10.0)
+            _acc = getattr(_info, "paid_service_access_info", None)
+            _sub = getattr(_info, "subscription", None)
+
+            def _to_micros(dollars):
+                return int(round(dollars * 1_000_000)) if isinstance(dollars, (int, float)) else 0
+
+            _monthly = getattr(_sub, "monthly_credits", None)
+            _has_cap = isinstance(_monthly, (int, float)) and _monthly > 0
+            _paid = getattr(_info, "paid_service_access", None)
+            agent._credits_state = CreditsState(
+                remaining_micros=_to_micros(getattr(_acc, "total_usable_credits", None)),
+                subscription_micros=_to_micros(getattr(_acc, "subscription_credits_remaining", None)),
+                subscription_limit_micros=_to_micros(_monthly) if _has_cap else None,
+                purchased_micros=_to_micros(getattr(_acc, "purchased_credits_remaining", None)),
+                rollover_micros=_to_micros(getattr(_sub, "rollover_credits", None)),
+                denominator_kind="subscription_cap" if _has_cap else "none",
+                paid_access=_paid if isinstance(_paid, bool) else True,
+                from_header=False,
+                captured_at=time.time(),
+            )
+
+        if getattr(agent, "_credits_session_start_micros", None) is None:
+            agent._credits_session_start_micros = agent._credits_state.remaining_micros
+
+        # At cold start the snapshot IS the first observation: prime the crossing
+        # gate so a session that opens already in a band warns immediately. The
+        # live header path keeps true crossing semantics.
+        _latch = getattr(agent, "_credits_latch", None)
+        if isinstance(_latch, dict) and agent._credits_state.used_fraction is not None:
+            _latch["seen_below_90"] = True
+
+        emit = getattr(agent, "_emit_credits_notices", None)
+        if callable(emit):
+            emit()
+        return True
+    except Exception:
+        # Fail-open: any auth/portal hiccup leaves _credits_state as-is, never blocks.
+        return False
