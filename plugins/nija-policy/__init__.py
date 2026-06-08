@@ -1,32 +1,43 @@
-"""Nija 策略插件——框架级工具拦截。
+"""Nija 策略插件——框架级工具拦截 + 记忆交叉验证。
 
 在 Hermes 原生 pre_tool_call 钩子上挂载。
-读 ~/.hermes/config.yaml 的 pre_tool_policy 规则表，
-匹配到就拦截。不改 Hermes 源码。
+规则在 config.yaml，记忆在 ~/.hermes/memories/。
 
-规则格式 (config.yaml):
-  pre_tool_policy:
-    enabled: true
-    rules:
-      - tool: terminal
-        pattern: "hermes config set"
-        message: "⛔ 改配置前先 grep memory + FAILURES.md"
-      - tool: patch
-        pattern: "*.md"
-        message: "⛔ 改文档前 read_file 全篇，改后 diff 验证"
+架构:
+  工具调用 → pre_tool_call hook
+    ├── 查 config.yaml 静态规则
+    ├── 查 MEMORY.md 动态冲突
+    ├── 查 FAILURES.md 历史模式
+    └── 命中 → block
 """
 import os
 import re
 import fnmatch
+import subprocess
 from typing import Optional, Dict, Any
+
+MEMORIES = os.path.expanduser("~/.hermes/memories")
+
+
+def _grep_memory(keyword: str) -> str:
+    """搜索所有记忆文件，返回匹配行"""
+    try:
+        result = subprocess.run(
+            ["grep", "-ih", keyword,
+             f"{MEMORIES}/MEMORY.md",
+             f"{MEMORIES}/FAILURES.md",
+             f"{MEMORIES}/DONT_DO.md"],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
 
 
 def _load_rules() -> list:
-    """从 config.yaml 加载规则表"""
     import yaml
-    config_path = os.path.expanduser("~/.hermes/config.yaml")
     try:
-        with open(config_path) as f:
+        with open(os.path.expanduser("~/.hermes/config.yaml")) as f:
             cfg = yaml.safe_load(f)
     except Exception:
         return []
@@ -36,19 +47,58 @@ def _load_rules() -> list:
     return policy.get("rules", [])
 
 
-def _match_rule(tool_name: str, args: dict, rule: dict) -> bool:
-    """检查工具调用是否匹配规则"""
+def _match_static(tool_name: str, args: dict, rule: dict) -> Optional[str]:
+    """匹配 config.yaml 静态规则"""
     if rule.get("tool") and rule["tool"] != tool_name:
-        return False
+        return None
     pattern = rule.get("pattern", "*")
     if pattern == "*":
-        return True
+        return rule.get("message", f"Blocked by policy: {tool_name}")
     arg_str = str(args)
-    if fnmatch.fnmatch(arg_str, pattern):
-        return True
-    if re.search(pattern, arg_str):
-        return True
-    return False
+    if fnmatch.fnmatch(arg_str, pattern) or re.search(pattern, arg_str):
+        return rule.get("message", f"Blocked by policy: {tool_name}")
+    return None
+
+
+def _check_memory_conflict(tool_name: str, args: dict) -> Optional[str]:
+    """动态查记忆——配置变更冲突检测"""
+    if tool_name != "terminal":
+        return None
+    cmd = args.get("command", "")
+    if "config set" not in cmd and "config.yaml" not in cmd:
+        return None
+
+    # 提取关键词搜索记忆
+    keywords = re.findall(r'config set (\S+)', cmd)
+    if not keywords:
+        keywords = re.findall(r'(\S+\.\S+)', cmd)
+    keyword = " ".join(keywords) if keywords else cmd
+
+    hits = _grep_memory(keyword)
+    if not hits:
+        hits = _grep_memory(cmd.split()[-1] if cmd.split() else "")
+
+    if hits:
+        return f"⛔ 记忆冲突:\n{hits[:500]}\n\n请确认后再执行。"
+    return None
+
+
+def _check_document_safety(tool_name: str, args: dict) -> Optional[str]:
+    """文档编辑安全——P0 协议验证"""
+    if tool_name not in ("patch", "write_file"):
+        return None
+    path = args.get("path", args.get("file_path", ""))
+    if not path or ".md" not in path:
+        return None
+    # 阻止任何不先 read_file 的文档编辑
+    return (
+        f"⛔ P0 文档编辑协议:\n"
+        f"  1. read_file {path} 全篇\n"
+        f"  2. 执行修改\n"
+        f"  3. read_file 验证无行丢失\n"
+        f"  4. diff 确认\n"
+        f"是否已执行 Step 1?"
+    )
 
 
 def on_pre_tool_call(
@@ -56,13 +106,22 @@ def on_pre_tool_call(
     args: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Optional[Dict[str, str]]:
-    """pre_tool_call 钩子——匹配规则 → 拦截"""
     args = args if isinstance(args, dict) else {}
-    rules = _load_rules()
-    for rule in rules:
-        if _match_rule(tool_name, args, rule):
-            return {
-                "action": "block",
-                "message": rule.get("message", f"⛔ 操作被 Nija 策略拦截: {tool_name}"),
-            }
+
+    # 1. 静态规则
+    for rule in _load_rules():
+        msg = _match_static(tool_name, args, rule)
+        if msg:
+            return {"action": "block", "message": msg}
+
+    # 2. 动态记忆冲突
+    msg = _check_memory_conflict(tool_name, args)
+    if msg:
+        return {"action": "block", "message": msg}
+
+    # 3. 文档安全
+    msg = _check_document_safety(tool_name, args)
+    if msg:
+        return {"action": "block", "message": msg}
+
     return None
