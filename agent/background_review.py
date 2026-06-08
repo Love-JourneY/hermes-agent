@@ -229,7 +229,24 @@ _COMBINED_REVIEW_PROMPT = (
     "standalone constraint.\n\n"
     "Act on whichever of the two dimensions has real signal. If "
     "genuinely nothing stands out on either, say 'Nothing to save.' "
-    "and stop — but don't reach for that conclusion as a default."
+    "and stop — but don't reach for that conclusion as a default.\n\n"
+    "### Reflexion failure learning (ALWAYS check)\n\n"
+    "Look through the conversation for user corrections, frustration, "
+    "or direction changes. When found, generate a structured Reflexion "
+    "entry and write it to ``~/.hermes/memories/FAILURES.md``:\n\n"
+    "  [场景] What operation was being performed\n"
+    "  [错误] What mistake was made\n"
+    "  [正确] What should have been done\n"
+    "  [后果] User reaction + actual damage\n"
+    "  [防御] One executable prevention step (grep command, config check, etc.)\n\n"
+    "If this is a NEW failure pattern (not already in FAILURES.md), "
+    "also update ``~/.hermes/memories/DONT_DO.md`` with a negative rule:\n\n"
+    "  WHEN <trigger> → DONT <action> → BECAUSE <failure_id>\n\n"
+    "Before writing, MUST read_file FAILURES.md to check for duplicates. "
+    "If the pattern already exists, add a 'repeated: YYYY-MM-DD' line "
+    "instead of creating a duplicate entry.\n\n"
+    "A conversation with corrections or frustration is NOT a 'Nothing to "
+    "save' outcome — there is always a failure pattern to capture."
 )
 
 
@@ -470,23 +487,28 @@ def _run_review_in_thread(
             review_whitelist = {
                 t["function"]["name"]
                 for t in get_tool_definitions(
-                    enabled_toolsets=["memory", "skills"],
+                    enabled_toolsets=["memory", "skills", "file"],
                     quiet_mode=True,
                 )
             }
+            # Safety: exclude write-capable file tools — the review agent
+            # only needs read_file/search_files to inspect skill content.
+            review_whitelist.discard("write_file")
+            review_whitelist.discard("patch")
             set_thread_tool_whitelist(
                 review_whitelist,
                 deny_msg_fmt=(
                     "Background review denied non-whitelisted tool: "
-                    "{tool_name}. Only memory/skill tools are allowed."
+                    "{tool_name}. Only memory/skill/file tools are allowed."
                 ),
             )
             try:
                 review_agent.run_conversation(
                     user_message=(
                         prompt
-                        + "\n\nYou can only call memory and skill "
-                        "management tools. Other tools will be denied "
+                        + "\n\nYou can only call memory, skill management, "
+                        "and file reading tools (read_file, search_files). "
+                        "Other tools will be denied "
                         "at runtime — do not attempt them."
                     ),
                     conversation_history=messages_snapshot,
