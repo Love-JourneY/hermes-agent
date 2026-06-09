@@ -3,4 +3,4 @@ version: 1.0.0
 description: "Nija's pre-tool policy enforcement — memory cross-reference, document integrity, config change guard. Pre-action block + post-action verify."
 hooks:
   - pre_tool_call
-  - transform_tool_result
+  - post_tool_call

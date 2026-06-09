@@ -1,11 +1,10 @@
 """Nija 策略插件——事前拦截 + 事后验证 + 记忆联动。
 
-钩子:
-  pre_tool_call         → 事前硬拦（config set, document edit）
-  transform_tool_result → 事后自检（验证无行丢失, 记忆交叉校验）
+官方钩子:
+  pre_tool_call  → 事前硬拦
+  post_tool_call → 事后自检（官方文档确认的钩子）
 
 规则来源: ~/.hermes/memories/{MEMORY,FAILURES,DONT_DO}.md
-开关配置: config.yaml → pre_tool_policy.checks
 """
 import os
 import re
@@ -13,20 +12,6 @@ import subprocess
 from typing import Optional, Dict, Any
 
 MEMORIES = os.path.expanduser("~/.hermes/memories")
-
-
-def _load_checks() -> list:
-    """从 config.yaml 读取启用的检查项"""
-    import yaml
-    try:
-        with open(os.path.expanduser("~/.hermes/config.yaml")) as f:
-            cfg = yaml.safe_load(f)
-    except Exception:
-        return ["memory_cross_reference", "document_safety"]
-    policy = cfg.get("pre_tool_policy", {})
-    if not policy.get("enabled"):
-        return []
-    return policy.get("checks", ["memory_cross_reference", "document_safety"])
 
 
 def _grep_memory(keyword: str) -> str:
@@ -43,20 +28,15 @@ def _grep_memory(keyword: str) -> str:
         return ""
 
 
-# ── 事前拦截 ──
-
 def on_pre_tool_call(
     tool_name: str = "",
     args: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Optional[Dict[str, str]]:
     args = args if isinstance(args, dict) else {}
-    checks = _load_checks()
-    if not checks:
-        return None
 
     # 文档安全——事前提醒
-    if "document_safety" in checks and tool_name in ("patch", "write_file"):
+    if tool_name in ("patch", "write_file"):
         path = args.get("path", args.get("file_path", ""))
         if path and ".md" in path:
             return {
@@ -72,7 +52,7 @@ def on_pre_tool_call(
             }
 
     # 记忆冲突——配置变更
-    if "memory_cross_reference" in checks and tool_name == "terminal":
+    if tool_name == "terminal":
         cmd = args.get("command", "")
         if "config set" in cmd or "config.yaml" in cmd:
             keywords = re.findall(r'config set (\S+)', cmd)
@@ -87,20 +67,15 @@ def on_pre_tool_call(
     return None
 
 
-# ── 事后验证 ──
-
-def on_transform_tool_result(
+def on_post_tool_call(
     tool_name: str = "",
     args: Optional[Dict[str, Any]] = None,
     result: Optional[str] = None,
     **kwargs,
 ) -> Optional[str]:
     args = args if isinstance(args, dict) else {}
-    checks = _load_checks()
-    if not checks or "document_safety" not in checks:
-        return None
 
-    # 文档编辑后——验证无行丢失
+    # 文档编辑后——验证行数
     if tool_name in ("patch", "write_file"):
         path = args.get("path", args.get("file_path", ""))
         if path and ".md" in path and os.path.exists(path):
@@ -108,11 +83,7 @@ def on_transform_tool_result(
                 with open(path) as f:
                     lines = len(f.readlines())
                 if result:
-                    return (
-                        f"{result}\n\n"
-                        f"📋 事后自检: {path} 当前 {lines} 行。"
-                        f"请 read_file 验证无行丢失。"
-                    )
+                    return f"{result}\n\n📋 自检: {path} 当前 {lines} 行。请 read_file 验证。"
             except Exception:
                 pass
 
@@ -121,4 +92,4 @@ def on_transform_tool_result(
 
 def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", on_pre_tool_call)
-    ctx.register_hook("transform_tool_result", on_transform_tool_result)
+    ctx.register_hook("post_tool_call", on_post_tool_call)
