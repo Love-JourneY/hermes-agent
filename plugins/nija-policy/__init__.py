@@ -1,10 +1,9 @@
-"""Nija 策略插件——事前拦截 + 事后验证 + 记忆联动。
+"""Nija 策略插件——三层拦截 + 记忆联动。
 
-官方钩子:
-  pre_tool_call  → 事前硬拦
-  post_tool_call → 事后自检（官方文档确认的钩子）
-
-规则来源: ~/.hermes/memories/{MEMORY,FAILURES,DONT_DO}.md
+钩子:
+  pre_llm_call      → 每次回复前注入强制上下文
+  pre_tool_call     → 工具调用前硬拦
+  post_tool_call    → 工具调用后自检
 """
 import os
 import re
@@ -28,6 +27,50 @@ def _grep_memory(keyword: str) -> str:
         return ""
 
 
+def _load_recent_failures() -> str:
+    """提取最近 5 条失败记录"""
+    try:
+        with open(f"{MEMORIES}/FAILURES.md") as f:
+            content = f.read()
+        # 提取所有 Fx 条目
+        failures = re.findall(r'### F\d+:.*?(?=### F\d+:|$)', content, re.DOTALL)
+        # 取最后 3 条
+        return "\n".join(failures[-3:]) if failures else ""
+    except Exception:
+        return ""
+
+
+def _load_critical_rules() -> str:
+    """提取 DON'T DO 规则"""
+    try:
+        with open(f"{MEMORIES}/DONT_DO.md") as f:
+            return f.read()[:2000]
+    except Exception:
+        return ""
+
+
+def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
+    """每次 LLM 回复前注入强制上下文"""
+    failures = _load_recent_failures()
+    rules = _load_critical_rules()
+
+    context = (
+        "⚠️ 回复前必须检查:\n"
+        "1. 这是凭感觉还是查了文件?\n"
+        "2. 这次回复是否在重复已知失败模式?\n"
+        "3. 需要改配置/改文档吗? → 先过 P0 协议\n"
+        "4. 中型以上任务? → 先查官方文档\n"
+        "5. Nija 想要选项吗? → 给 A/B/C\n\n"
+    )
+    if failures:
+        context += f"最近失败记录:\n{failures[:1000]}\n\n"
+    if rules:
+        context += f"负面规则:\n{rules[:1000]}\n\n"
+    context += "---\n"
+
+    return {"context": context}
+
+
 def on_pre_tool_call(
     tool_name: str = "",
     args: Optional[Dict[str, Any]] = None,
@@ -35,7 +78,6 @@ def on_pre_tool_call(
 ) -> Optional[Dict[str, str]]:
     args = args if isinstance(args, dict) else {}
 
-    # 文档安全——事前提醒
     if tool_name in ("patch", "write_file"):
         path = args.get("path", args.get("file_path", ""))
         if path and ".md" in path:
@@ -51,7 +93,6 @@ def on_pre_tool_call(
                 ),
             }
 
-    # 记忆冲突——配置变更
     if tool_name == "terminal":
         cmd = args.get("command", "")
         if "config set" in cmd or "config.yaml" in cmd:
@@ -74,8 +115,6 @@ def on_post_tool_call(
     **kwargs,
 ) -> Optional[str]:
     args = args if isinstance(args, dict) else {}
-
-    # 文档编辑后——验证行数
     if tool_name in ("patch", "write_file"):
         path = args.get("path", args.get("file_path", ""))
         if path and ".md" in path and os.path.exists(path):
@@ -86,10 +125,10 @@ def on_post_tool_call(
                     return f"{result}\n\n📋 自检: {path} 当前 {lines} 行。请 read_file 验证。"
             except Exception:
                 pass
-
     return None
 
 
 def register(ctx) -> None:
+    ctx.register_hook("pre_llm_call", on_pre_llm_call)
     ctx.register_hook("pre_tool_call", on_pre_tool_call)
     ctx.register_hook("post_tool_call", on_post_tool_call)
