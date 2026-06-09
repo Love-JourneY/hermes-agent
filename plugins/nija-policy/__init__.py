@@ -186,8 +186,10 @@ def on_post_tool_call(
     args = args if isinstance(args, dict) else {}
 
     if tool_name in ("skill_view", "skills_list", "skill_manage"):
+        _consecutive_skips = 0
         _skills_loaded = True
     if tool_name in ("web_search", "web_extract", "browser_navigate"):
+        _consecutive_skips = 0
         _web_searched = True
 
     if tool_name in ("patch", "write_file"):
