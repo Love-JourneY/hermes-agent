@@ -1,9 +1,9 @@
-"""Nija 策略插件——三层拦截 + 记忆联动。
+"""Nija 策略插件——三层拦截 + 记忆联动 + 技能追踪。
 
 钩子:
-  pre_llm_call      → 每次回复前注入强制上下文
+  pre_llm_call      → 注入强制上下文 + 检测上轮是否调了技能
   pre_tool_call     → 工具调用前硬拦
-  post_tool_call    → 工具调用后自检
+  post_tool_call    → 工具调用后自检 + 追踪 skill_view 调用
 """
 import os
 import re
@@ -11,6 +11,9 @@ import subprocess
 from typing import Optional, Dict, Any
 
 MEMORIES = os.path.expanduser("~/.hermes/memories")
+
+# 跨轮状态追踪
+_skills_loaded_this_turn = False
 
 
 def _grep_memory(keyword: str) -> str:
@@ -28,20 +31,16 @@ def _grep_memory(keyword: str) -> str:
 
 
 def _load_recent_failures() -> str:
-    """提取最近 5 条失败记录"""
     try:
         with open(f"{MEMORIES}/FAILURES.md") as f:
             content = f.read()
-        # 提取所有 Fx 条目
         failures = re.findall(r'### F\d+:.*?(?=### F\d+:|$)', content, re.DOTALL)
-        # 取最后 3 条
         return "\n".join(failures[-3:]) if failures else ""
     except Exception:
         return ""
 
 
 def _load_critical_rules() -> str:
-    """提取 DON'T DO 规则"""
     try:
         with open(f"{MEMORIES}/DONT_DO.md") as f:
             return f.read()[:2000]
@@ -50,10 +49,12 @@ def _load_critical_rules() -> str:
 
 
 def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
-    """每次 LLM 回复前注入强制上下文"""
+    global _skills_loaded_this_turn
+
     failures = _load_recent_failures()
     rules = _load_critical_rules()
 
+    # 构建上下文
     context = (
         "⚠️ 回复前必须检查:\n"
         "1. 这是凭感觉还是查了文件?\n"
@@ -62,11 +63,26 @@ def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
         "4. 中型以上任务? → 先查官方文档\n"
         "5. Nija 想要选项吗? → 给 A/B/C\n\n"
     )
+
+    # 上轮没调技能 → 升级为硬性要求
+    if not _skills_loaded_this_turn:
+        context = (
+            "⛔ 本轮强制: 回复前先调 skill_view 检查是否有匹配技能。"
+            "185个技能不是摆设。F8/F9 教训在此。\n\n"
+        ) + context
+    else:
+        context = (
+            "✅ 上轮已调技能, 保持。\n\n"
+        ) + context
+
     if failures:
         context += f"最近失败记录:\n{failures[:1000]}\n\n"
     if rules:
         context += f"负面规则:\n{rules[:1000]}\n\n"
     context += "---\n"
+
+    # 重置本轮的追踪
+    _skills_loaded_this_turn = False
 
     return {"context": context}
 
@@ -114,7 +130,15 @@ def on_post_tool_call(
     result: Optional[str] = None,
     **kwargs,
 ) -> Optional[str]:
+    global _skills_loaded_this_turn
+
     args = args if isinstance(args, dict) else {}
+
+    # 追踪技能调用
+    if tool_name in ("skill_view", "skills_list", "skill_manage"):
+        _skills_loaded_this_turn = True
+
+    # 文档编辑后验证
     if tool_name in ("patch", "write_file"):
         path = args.get("path", args.get("file_path", ""))
         if path and ".md" in path and os.path.exists(path):
