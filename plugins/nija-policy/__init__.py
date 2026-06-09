@@ -129,7 +129,4 @@ def on_pre_tool_call(
 
 def register(ctx) -> None:
     """Hermes 插件入口——注册 pre_tool_call 钩子"""
-    # 写一个标记文件——证明 register 被调用了
-    with open("/tmp/nija-plugin-loaded", "w") as f:
-        f.write("loaded")
     ctx.register_hook("pre_tool_call", on_pre_tool_call)
