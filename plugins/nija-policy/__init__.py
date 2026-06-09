@@ -125,3 +125,8 @@ def on_pre_tool_call(
         return {"action": "block", "message": msg}
 
     return None
+
+
+def register(ctx) -> None:
+    """Hermes 插件入口——注册 pre_tool_call 钩子"""
+    ctx.register_hook("pre_tool_call", on_pre_tool_call)
