@@ -17,6 +17,7 @@ MEMORIES = os.path.expanduser("~/.hermes/memories")
 _skills_loaded = False
 _web_searched = False
 _consecutive_skips = 0
+_docs_may_be_stale = False
 
 # 渐进闸门
 _GATED_L1 = {"terminal", "patch", "write_file", "delegate_task"}
@@ -67,6 +68,7 @@ def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
         _consecutive_skips += 1
     else:
         _consecutive_skips = 0
+_docs_may_be_stale = False
 
     level = min(_consecutive_skips, 3)
     if level >= 3:
@@ -87,7 +89,18 @@ def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
     else:
         gate = "✅ 权限全开。\n\n"
 
-    context = gate + (
+    # 过时文档提醒
+    stale_warning = ""
+    global _docs_may_be_stale
+    if _docs_may_be_stale:
+        stale_warning = (
+            "📋 代码已变更——检查这些文档是否需要更新:\n"
+            "  MAINTENANCE.md / notes/ / repo/*-deploy/README.md / skills\n"
+            "  不改文档 = 系统熵增 = Nija 必须亲自提醒 = 失败。\n\n"
+        )
+        _docs_may_be_stale = False
+
+    context = gate + stale_warning + (
         "⚠️ 回复前必须检查:\n"
         "1. 这是凭感觉还是查了文件?\n"
         "2. 这次回复是否在重复已知失败模式?\n"
@@ -187,9 +200,11 @@ def on_post_tool_call(
 
     if tool_name in ("skill_view", "skills_list", "skill_manage"):
         _consecutive_skips = 0
+_docs_may_be_stale = False
         _skills_loaded = True
     if tool_name in ("web_search", "web_extract", "browser_navigate"):
         _consecutive_skips = 0
+_docs_may_be_stale = False
         _web_searched = True
 
     if tool_name in ("patch", "write_file"):

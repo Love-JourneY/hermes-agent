@@ -1,6 +1,6 @@
 name: nija-policy
-version: 2.4.0
-description: "Nija 策略插件——渐进信任模型 L1→L2→L3 闸门 + 记忆联动"
+version: 2.6.0
+description: "Nija 策略插件——渐进信任模型 L1→L2→L3 + 文档保护 + 自动过时检测"
 hooks:
   - pre_llm_call
   - pre_tool_call
