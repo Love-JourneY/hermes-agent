@@ -1,9 +1,11 @@
-"""Nija 策略插件——四层拦截 + 技能追踪 + 联网追踪。
+"""Nija 策略插件——渐进信任模型 + 多级闸门。
 
-钩子:
-  pre_llm_call      → 注入强制上下文 + 检测上轮是否调了技能/联网
-  pre_tool_call     → 工具调用前硬拦 (config/doc/skill-gate/search-gate)
-  post_tool_call    → 追踪 skill_view + web_search 调用 + 文档行数验证
+每轮不调技能/不联网 → 工具权限收紧一级：
+  L1: terminal/patch/write_file/delegate_task blocked
+  L2: + read_file/search_files blocked
+  L3: + ALL tools blocked（软禁）
+
+调了 skill_view 或 web_search → 权限恢复全开。
 """
 import os
 import re
@@ -14,9 +16,12 @@ MEMORIES = os.path.expanduser("~/.hermes/memories")
 
 _skills_loaded = False
 _web_searched = False
+_consecutive_skips = 0
 
-# 需要前置检查的工具（调这些前必须先调技能或联网搜索）
-_GATED_TOOLS = {"terminal", "patch", "write_file", "delegate_task"}
+# 渐进闸门
+_GATED_L1 = {"terminal", "patch", "write_file", "delegate_task"}
+_GATED_L2 = _GATED_L1 | {"read_file", "search_files"}
+_GATED_L3 = None  # None = all tools blocked
 
 
 def _grep_memory(keyword: str) -> str:
@@ -52,20 +57,35 @@ def _load_critical_rules() -> str:
 
 
 def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
-    global _skills_loaded, _web_searched
+    global _skills_loaded, _web_searched, _consecutive_skips
 
     failures = _load_recent_failures()
     rules = _load_critical_rules()
 
-    # 状态提示
+    # 信任模型: 每轮跳过 → 计数 +1; 调了 → 清零
     if not _skills_loaded and not _web_searched:
-        gate = "⛔ 本轮强制: 回复前先调 skill_view 或 web_search。185个技能不是摆设，三套联网基础设施不是装饰。F8/F9 教训在此。\n\n"
-    elif not _skills_loaded:
-        gate = "⚠️ 上轮没调技能。建议加载。\n\n"
-    elif not _web_searched:
-        gate = "⚠️ 上轮没联网搜索。中型任务建议查资料。\n\n"
+        _consecutive_skips += 1
     else:
-        gate = "✅ 技能+联网 已覆盖, 保持。\n\n"
+        _consecutive_skips = 0
+
+    level = min(_consecutive_skips, 3)
+    if level >= 3:
+        gate = (
+            "🛑 软禁 L3: 已连续 3 轮不调技能/不联网。"
+            "所有工具已封锁。调 skill_view 或 web_search 恢复权限。\n\n"
+        )
+    elif level == 2:
+        gate = (
+            "⛔⛔ L2 闸门: 连续 2 轮跳过。terminal/patch/write_file/read_file/search_files/delegate_task 全封锁。"
+            "调 skill_view 或 web_search 恢复。\n\n"
+        )
+    elif level == 1:
+        gate = (
+            "⛔ L1 闸门: terminal/patch/write_file/delegate_task 封锁。"
+            "调 skill_view 或 web_search 恢复。\n\n"
+        )
+    else:
+        gate = "✅ 权限全开。\n\n"
 
     context = gate + (
         "⚠️ 回复前必须检查:\n"
@@ -93,22 +113,38 @@ def on_pre_tool_call(
     args: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Optional[Dict[str, str]]:
-    global _skills_loaded, _web_searched
+    global _consecutive_skips
     args = args if isinstance(args, dict) else {}
 
-    # ── 技能/联网闸门: 调 gated 工具前必须先调技能或联网 ──
-    if tool_name in _GATED_TOOLS:
-        if not _skills_loaded and not _web_searched:
-            return {
-                "action": "block",
-                "message": (
-                    "⛔ 技能闸门: 调 terminal/patch/write_file/delegate_task 前\n"
-                    "必须先调 skill_view (加载技能) 或 web_search (联网查资料)。\n"
-                    "F8/F9 教训: 185个技能 + 三套联网基础设施不是摆设。"
-                ),
-            }
+    # ── 渐进闸门 ──
+    level = min(_consecutive_skips + (0 if _skills_loaded or _web_searched else 1), 3)
 
-    # ── 文档编辑 P0 协议 ──
+    if level >= 3:
+        return {
+            "action": "block",
+            "message": (
+                "🛑 软禁 L3: 所有工具已封锁。"
+                "必须调 skill_view 或 web_search 恢复权限。"
+            ),
+        }
+    elif level >= 2 and tool_name in _GATED_L2:
+        return {
+            "action": "block",
+            "message": (
+                f"⛔⛔ L2 闸门: {tool_name} 已封锁。"
+                "先调 skill_view 或 web_search。"
+            ),
+        }
+    elif level >= 1 and tool_name in _GATED_L1:
+        return {
+            "action": "block",
+            "message": (
+                f"⛔ L1 闸门: {tool_name} 已封锁。"
+                "先调 skill_view 或 web_search。"
+            ),
+        }
+
+    # ── 文档编辑 P0 ──
     if tool_name in ("patch", "write_file"):
         path = args.get("path", args.get("file_path", ""))
         if path and ".md" in path:
@@ -124,7 +160,7 @@ def on_pre_tool_call(
                 ),
             }
 
-    # ── 记忆冲突: 配置变更 ──
+    # ── 记忆冲突 ──
     if tool_name == "terminal":
         cmd = args.get("command", "")
         if "config set" in cmd or "config.yaml" in cmd:
@@ -149,15 +185,11 @@ def on_post_tool_call(
     global _skills_loaded, _web_searched
     args = args if isinstance(args, dict) else {}
 
-    # 追踪技能
     if tool_name in ("skill_view", "skills_list", "skill_manage"):
         _skills_loaded = True
-
-    # 追踪联网搜索
     if tool_name in ("web_search", "web_extract", "browser_navigate"):
         _web_searched = True
 
-    # 文档编辑后验证
     if tool_name in ("patch", "write_file"):
         path = args.get("path", args.get("file_path", ""))
         if path and ".md" in path and os.path.exists(path):
