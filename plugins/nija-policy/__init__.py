@@ -117,7 +117,7 @@ def on_pre_tool_call(
     args = args if isinstance(args, dict) else {}
 
     # ── 渐进闸门 ──
-    level = min(_consecutive_skips + (0 if _skills_loaded or _web_searched else 1), 3)
+    level = min(_consecutive_skips, 3)
 
     if level >= 3:
         return {
