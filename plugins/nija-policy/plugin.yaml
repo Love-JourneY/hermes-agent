@@ -1,6 +1,6 @@
 name: nija-policy
-version: 2.0.0
-description: "Nija's enforcement — pre_llm_call inject, pre_tool_call block, post_tool_call verify"
+version: 2.4.0
+description: "Nija 策略插件——渐进信任模型 L1→L2→L3 闸门 + 记忆联动"
 hooks:
   - pre_llm_call
   - pre_tool_call
