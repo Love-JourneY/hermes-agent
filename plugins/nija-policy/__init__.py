@@ -129,4 +129,12 @@ def on_pre_tool_call(
 
 def register(ctx) -> None:
     """Hermes 插件入口——注册 pre_tool_call 钩子"""
+    import logging
+    logger = logging.getLogger("nija-policy")
+    try:
+        rules = _load_rules()
+        logger.warning(f"nija-policy loaded: {len(rules)} rules, enabled: {bool(rules)}")
+    except Exception as e:
+        logger.error(f"nija-policy load_rules failed: {e}")
     ctx.register_hook("pre_tool_call", on_pre_tool_call)
+    logger.warning("nija-policy: pre_tool_call hook registered")
