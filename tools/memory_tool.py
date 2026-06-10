@@ -405,11 +405,15 @@ class MemoryStore:
                     "usage": f"{current:,}/{limit:,}",
                 }
 
+            old_content = entries[idx]
             entries[idx] = new_content
             self._set_entries(target, entries)
             self.save_to_disk(target)
 
-        return self._success_response(target, "Entry replaced.")
+        return self._success_response(
+            target, "Entry replaced.",
+            diff=f"- {old_content[:200]}\n+ {new_content[:200]}"
+        )
 
     def remove(self, target: str, old_text: str) -> Dict[str, Any]:
         """Remove the entry containing old_text substring."""
@@ -441,11 +445,15 @@ class MemoryStore:
                 # All identical -- safe to remove just the first
 
             idx = matches[0][0]
+            old_content = entries[idx]
             entries.pop(idx)
             self._set_entries(target, entries)
             self.save_to_disk(target)
 
-        return self._success_response(target, "Entry removed.")
+        return self._success_response(
+            target, "Entry removed.",
+            diff=f"- [{len(entries) + 1} entries → {len(entries)}] removed: {old_content[:200]}"
+        )
 
     def format_for_system_prompt(self, target: str) -> Optional[str]:
         """
@@ -462,7 +470,7 @@ class MemoryStore:
 
     # -- Internal helpers --
 
-    def _success_response(self, target: str, message: str = None) -> Dict[str, Any]:
+    def _success_response(self, target: str, message: str = None, diff: str = None) -> Dict[str, Any]:
         entries = self._entries_for(target)
         current = self._char_count(target)
         limit = self._char_limit(target)
@@ -475,6 +483,8 @@ class MemoryStore:
             "usage": f"{pct}% — {current:,}/{limit:,} chars",
             "entry_count": len(entries),
         }
+        if diff:
+            resp["diff"] = diff
         if message:
             resp["message"] = message
         return resp
