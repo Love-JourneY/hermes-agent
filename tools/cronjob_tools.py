@@ -620,6 +620,7 @@ def cronjob(
                         "name": job["name"],
                         "schedule": job.get("schedule_display"),
                     },
+                    "diff": f"- name: {job['name']}\n- schedule: {job.get('schedule_display', '?')}\n- id: {job_id}",
                 },
                 indent=2,
             )

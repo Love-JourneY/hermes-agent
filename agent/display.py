@@ -425,6 +425,13 @@ def extract_edit_diff(
             if isinstance(diff, str) and diff.strip():
                 return diff
 
+    if tool_name == "memory" and result:
+        data = safe_json_loads(result)
+        if isinstance(data, dict):
+            diff = data.get("diff")
+            if isinstance(diff, str) and diff.strip():
+                return diff
+
     if tool_name not in {"write_file", "patch", "skill_manage"}:
         return None
     if not _result_succeeded(result):

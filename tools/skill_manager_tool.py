@@ -720,6 +720,7 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
     return {
         "success": True,
         "message": message,
+        "diff": f"- skill: {name}\n- path: {skill_dir}",
     }
 
 
@@ -815,6 +816,7 @@ def _remove_file(name: str, file_path: str) -> Dict[str, Any]:
     return {
         "success": True,
         "message": f"File '{file_path}' removed from skill '{name}'.",
+        "diff": f"- {file_path} (from skill: {name})",
     }
 
 
