@@ -1,5 +1,5 @@
 name: nija-policy
-version: 3.5.0
+version: 3.6.0
 description: "Nija 策略插件 v3.1——强制反思检查点+硬闸门+文档同步强制尾步：检测自建系统修改→强制提醒self-test-protocol。不再靠提醒，靠封锁。"
 hooks:
   - pre_llm_call
