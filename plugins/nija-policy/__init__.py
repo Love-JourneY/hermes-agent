@@ -32,6 +32,10 @@ _patch_warnings = []
 _file_snapshots = {}
 _modified_files = set()
 
+# SKILL STATS: 追踪技能使用频率，用于 DIVERSITY GATE
+_skill_usage_history = {}   # {skill_name: count_in_last_10_turns}
+_recent_skills = []         # ordered list of skill names, max 10
+
 _GATED_L1 = {"terminal", "patch", "write_file", "delegate_task"}
 _GATED_L2 = _GATED_L1 | {"read_file", "search_files"}
 
@@ -157,6 +161,7 @@ def on_pre_tool_call(
 ) -> Optional[Dict[str, str]]:
     global _consecutive_skips, _loaded_skills_this_turn, _files_read_this_turn
     global _semantic_audit_pending, _audit_files
+    global _skill_usage_history, _recent_skills
     args = args if isinstance(args, dict) else {}
 
     level = min(_consecutive_skips, 3)
@@ -184,11 +189,26 @@ def on_pre_tool_call(
         return {
             "action": "block",
             "message": (
-                f"🔒 HARD GATE: {tool_name} 封锁。\\n"
-                "你必须先反思当前任务→判断类型→加载匹配技能。\\n"
+                f"🔒 HARD GATE: {tool_name} 封锁。\n"
+                "你必须先反思当前任务→判断类型→加载匹配技能。\n"
                 "确定类型后，skill_view 加载对应技能即可解锁"
             ),
         }
+
+    # ── SKILL STATS GATE: 技能多样性硬约束 ──
+    if tool_name in _GATED_L1 and _loaded_skills_this_turn:
+        # 检查最近10次中任一技能出现≥3次 → 过度依赖
+        for skill in _loaded_skills_this_turn:
+            count = _skill_usage_history.get(skill, 0)
+            if count >= 3:
+                return {
+                    "action": "block",
+                    "message": (
+                        f"🔒 SKILL STATS: {skill} 在最近10次中用了{count}次——过度依赖。\n"
+                        "要解锁: 加载一个最近没用过的不同类别技能。\n"
+                        "提示: skills_list 看全量→选不常用的→skill_view 加载。"
+                    ),
+                }
 
     # ── 语义审计硬闸 ──
     if _semantic_audit_pending and tool_name in _GATED_L1:
@@ -282,6 +302,7 @@ def on_post_tool_call(
     global _skills_loaded, _web_searched, _consecutive_skips, _loaded_skills_this_turn
     global _needs_doc_sync, _last_modified_doc, _files_read_this_turn
     global _semantic_audit_pending, _audit_files, _patch_warnings, _audit_verified, _file_snapshots, _modified_files
+    global _skill_usage_history, _recent_skills
     args = args if isinstance(args, dict) else {}
 
     if tool_name == "read_file":
@@ -389,6 +410,12 @@ def on_post_tool_call(
         skill_name = args.get("name", "")
         if skill_name and skill_name not in _loaded_skills_this_turn:
             _loaded_skills_this_turn.append(skill_name)
+            # SKILL STATS 追踪
+            _recent_skills.append(skill_name)
+            if len(_recent_skills) > 10:
+                old = _recent_skills.pop(0)
+                _skill_usage_history[old] = _skill_usage_history.get(old, 0) - 1
+            _skill_usage_history[skill_name] = _skill_usage_history.get(skill_name, 0) + 1
 
     if tool_name in ("web_search", "web_extract", "browser_navigate"):
         _consecutive_skips = 0
