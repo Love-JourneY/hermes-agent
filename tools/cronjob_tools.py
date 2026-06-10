@@ -545,6 +545,16 @@ def cronjob(
                 profile=_normalize_optional_job_value(profile),
                 no_agent=_no_agent,
             )
+            # Build creation diff (green '+' lines for what was created)
+            created_fields = []
+            if job.get("prompt"):
+                created_fields.append(f"+ prompt: {job['prompt'][:150]}")
+            created_fields.append(f"+ schedule: {job.get('schedule_display', '?')}")
+            created_fields.append(f"+ name: {job.get('name', job['id'])}")
+            if job.get("skills"):
+                created_fields.append(f"+ skills: {', '.join(job['skills'])}")
+            created_fields.append(f"+ deliver: {job.get('deliver', 'local')}")
+
             return json.dumps(
                 {
                     "success": True,
@@ -558,6 +568,7 @@ def cronjob(
                     "next_run_at": job["next_run_at"],
                     "job": _format_job(job),
                     "message": f"Cron job '{job['name']}' created.",
+                    "diff": "\\n".join(created_fields),
                 },
                 indent=2,
             )
@@ -712,9 +723,27 @@ def cronjob(
                 return tool_error("No updates provided.", success=False)
             updated = update_job(job_id, updates)
             result = {"success": True, "job": _format_job(updated)}
+            diff_lines = []
+            # Prompt diff (from _prompt_diff)
             prompt_diff = updated.get("_prompt_diff")
             if prompt_diff:
-                result["diff"] = f"- {prompt_diff['old'][:200]}\n+ {prompt_diff['new'][:200]}"
+                diff_lines.append(f"- prompt: {prompt_diff['old'][:200]}")
+                diff_lines.append(f"+ prompt: {prompt_diff['new'][:200]}")
+            # Non-prompt field diffs
+            for field, display in [("name", "name"), ("schedule_display", "schedule"),
+                                    ("deliver", "deliver")]:
+                if field in updates:
+                    old_val = str(job.get(field, ""))[:100]
+                    new_val = str(updates[field])[:100]
+                    diff_lines.append(f"- {display}: {old_val}")
+                    diff_lines.append(f"+ {display}: {new_val}")
+            if "skills" in updates:
+                old_skills = ", ".join(job.get("skills") or [])
+                new_skills = ", ".join(updates["skills"] or [])
+                diff_lines.append(f"- skills: [{old_skills}]")
+                diff_lines.append(f"+ skills: [{new_skills}]")
+            if diff_lines:
+                result["diff"] = "\\n".join(diff_lines)
             return json.dumps(result, indent=2)
 
         return tool_error(f"Unknown cron action '{action}'", success=False)
