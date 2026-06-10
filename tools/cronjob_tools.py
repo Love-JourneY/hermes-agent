@@ -725,14 +725,12 @@ def cronjob(
             updated = update_job(job_id, updates)
             result = {"success": True, "job": _format_job(updated)}
             diff_lines = []
-            # Prompt diff (from _prompt_diff)
             prompt_diff = updated.get("_prompt_diff")
             if prompt_diff:
                 diff_lines.append(f"- prompt: {prompt_diff['old'][:200]}")
                 diff_lines.append(f"+ prompt: {prompt_diff['new'][:200]}")
-            # Non-prompt field diffs
-            for field, display in [("name", "name"), ("schedule_display", "schedule"),
-                                    ("deliver", "deliver")]:
+            for field, display in [("schedule_display", "schedule"),
+                                    ("deliver", "deliver"), ("name", "name")]:
                 if field in updates:
                     old_val = str(job.get(field, ""))[:100]
                     new_val = str(updates[field])[:100]
