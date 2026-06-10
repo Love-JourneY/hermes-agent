@@ -711,7 +711,11 @@ def cronjob(
             if not updates:
                 return tool_error("No updates provided.", success=False)
             updated = update_job(job_id, updates)
-            return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
+            result = {"success": True, "job": _format_job(updated)}
+            prompt_diff = updated.get("_prompt_diff")
+            if prompt_diff:
+                result["diff"] = f"- {prompt_diff['old'][:200]}\n+ {prompt_diff['new'][:200]}"
+            return json.dumps(result, indent=2)
 
         return tool_error(f"Unknown cron action '{action}'", success=False)
 
