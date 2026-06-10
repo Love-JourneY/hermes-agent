@@ -204,9 +204,32 @@ def todo_tool(
         return tool_error("TodoStore not initialized")
 
     if todos is not None:
+        old_items = {i["id"]: dict(i) for i in store.read()} if merge else {}
         items = store.write(todos, merge)
+        # Build diff for write operations
+        diff_lines = []
+        if merge:
+            for item in items:
+                iid = item["id"]
+                old = old_items.get(iid)
+                if old is None:
+                    diff_lines.append(f"+ [{item['status']}] {item['content']}")
+                elif old["status"] != item["status"]:
+                    diff_lines.append(f"- [{old['status']}] {old['content']}")
+                    diff_lines.append(f"+ [{item['status']}] {item['content']}")
+                elif old["content"] != item["content"]:
+                    diff_lines.append(f"- [{old['status']}] {old['content']}")
+                    diff_lines.append(f"+ [{item['status']}] {item['content']}")
+            # Detect removed items
+            new_ids = {i["id"] for i in items}
+            for oid, old in old_items.items():
+                if oid not in new_ids:
+                    diff_lines.append(f"- [{old['status']}] {old['content']}")
+        elif len(items) > 0:
+            diff_lines = [f"+ [{i['status']}] {i['content']}" for i in items]
     else:
         items = store.read()
+        diff_lines = []
 
     # Build summary counts
     pending = sum(1 for i in items if i["status"] == "pending")
@@ -214,7 +237,7 @@ def todo_tool(
     completed = sum(1 for i in items if i["status"] == "completed")
     cancelled = sum(1 for i in items if i["status"] == "cancelled")
 
-    return json.dumps({
+    result = {
         "todos": items,
         "summary": {
             "total": len(items),
@@ -223,7 +246,10 @@ def todo_tool(
             "completed": completed,
             "cancelled": cancelled,
         },
-    }, ensure_ascii=False)
+    }
+    if diff_lines:
+        result["diff"] = "\\n".join(diff_lines)
+    return json.dumps(result, ensure_ascii=False)
 
 
 def check_todo_requirements() -> bool:
