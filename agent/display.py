@@ -837,7 +837,7 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
                     preview = lines[0][:60]
                 else:
                     preview = f"{lines[0][:30]} ... {lines[-1][:30]}"
-                return True, f" → "{preview}""
+                return True, f" → {preview}"
             if exit_code is not None and exit_code != 0:
                 err_msg = data.get("error")
                 if err_msg:
@@ -856,10 +856,11 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
         if isinstance(data, dict) and "results" in data:
             results = data.get("results", [])
             if results:
-                title = results[0].get("title", "") or results[0].get("url", "")
-                content_len = len(results[0].get("content", ""))
+                content = results[0].get("content", "")
+                content_len = len(content)
                 if content_len > 0:
-                    return True, f" 📄 {title[:50]} ({content_len}字)"
+                    snippet = content[:50].replace('\n', ' ').strip()
+                    return True, f" 📄 \"{snippet}...\" ({content_len} chars)"
                 else:
                     err = results[0].get("error") or results[0].get("metadata", {}).get("error", "")
                     if err:
