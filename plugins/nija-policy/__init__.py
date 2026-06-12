@@ -170,6 +170,36 @@ def _cron_healthy():
         pass
     return True
 
+# ── v6.0 CSMA/CD Carrier Sense — embedded in pre_llm_call ──
+import sqlite3 as _sqlite3
+
+_last_user_msg_count = 0
+_housekeeping_last_triggered = 0
+_HOUSEKEEPING_COOLDOWN = 300  # 5min between housekeeping triggers
+
+def _get_user_msg_count() -> int:
+    """Count only Nija's messages in the active CLI session."""
+    try:
+        conn = _sqlite3.connect(os.path.expanduser("~/.hermes/state.db"))
+        row = conn.execute(
+            "SELECT m.session_id FROM messages m "
+            "JOIN sessions s ON m.session_id = s.id "
+            "WHERE s.source='cli' AND s.ended_at IS NULL AND m.role='user' "
+            "ORDER BY m.id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            conn.close()
+            return 0
+        sid = row[0]
+        count = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id=? AND role='user'",
+            (sid,)
+        ).fetchone()[0]
+        conn.close()
+        return count
+    except:
+        return 0
+
 
 def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
     global _skills_loaded, _web_searched, _consecutive_skips
@@ -243,6 +273,20 @@ def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
         memory_check = f"⚠️ 近期失败（别重复）:\\n{recent[:300]}\\n\\n"
 
     context = gate_msg + audit_gate + struct_warn + doc_sync + stale + memory_check + "---\\n"
+
+    # v6.0 CSMA/CD: Nija silence detection
+    global _last_user_msg_count, _housekeeping_last_triggered
+    current = _get_user_msg_count()
+    if _last_user_msg_count > 0 and current == _last_user_msg_count:
+        if time.time() - _housekeeping_last_triggered > _HOUSEKEEPING_COOLDOWN:
+            context += (
+                "\\n[CRON IDLE] Nija has not sent new messages since last response. "
+                "Channel is silent - do housekeeping (semantic extraction): "
+                "session_search this session, understand what changed, "
+                "patch memo/FAILURES/DONT_DO. Do this BEFORE responding.\\n"
+            )
+            _housekeeping_last_triggered = time.time()
+    _last_user_msg_count = current
 
     _skills_loaded = False
     _web_searched = False
