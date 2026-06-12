@@ -4,5 +4,8 @@
       "last_msg_count": 341,
       "last_checked": "2026-06-12T23:24:39"
     }
+  },
+  "housekeeping_lease": {
+    "expires_at": 0
   }
 }
