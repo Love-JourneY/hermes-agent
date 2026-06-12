@@ -113,6 +113,63 @@ def _grep_memory(keyword: str) -> str:
     except Exception:
         return ""
 
+# v5.0 CSMA/CD Cron Lease Gate
+import json as _json
+
+_TRACKER_PATH = os.path.expanduser("~/.hermes/hermes-agent/plugins/housekeeping/tracker.json")
+_CRON_JOBS_PATH = os.path.expanduser("~/.hermes/cron/jobs.json")
+
+_cache_lease = {"data": {}, "mtime": 0}
+_cache_counter = 0
+_CACHE_INTERVAL = 30
+
+def _read_lease():
+    try:
+        with open(_TRACKER_PATH) as f:
+            data = _json.load(f)
+        return data.get("housekeeping_lease", {})
+    except:
+        return {}
+
+def _check_lease():
+    global _cache_lease, _cache_counter
+    _cache_counter += 1
+    if _cache_counter % _CACHE_INTERVAL != 0 and _cache_lease.get("mtime"):
+        lease = _cache_lease["data"]
+    else:
+        try:
+            mtime = os.path.getmtime(_TRACKER_PATH)
+            if mtime == _cache_lease.get("mtime"):
+                lease = _cache_lease["data"]
+            else:
+                with open(_TRACKER_PATH) as f:
+                    data = _json.load(f)
+                lease = data.get("housekeeping_lease", {})
+                _cache_lease = {"data": lease, "mtime": mtime}
+        except:
+            lease = {}
+    if not lease:
+        return None
+    expires = lease.get("expires_at", 0)
+    started = lease.get("started_at", expires - 15)
+    if time.time() < expires:
+        elapsed = int(time.time() - started)
+        return f"Cron housekeeping in progress (started {elapsed}s ago). Your edit is queued."
+    return None
+
+def _cron_healthy():
+    try:
+        with open(_CRON_JOBS_PATH) as f:
+            cron_data = _json.load(f)
+        for j in cron_data.get("jobs", []):
+            if "\u5bb6\u52a1" in (j.get("name") or ""):
+                if j.get("last_status") == "error":
+                    return False
+                return True
+    except:
+        pass
+    return True
+
 
 def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
     global _skills_loaded, _web_searched, _consecutive_skips
@@ -394,6 +451,25 @@ def on_pre_tool_call(
                 return {"action": "block", "message":
                     "🔒 框架工具闸门: terminal curl localhost:8080 被拦截。\\n"
                     "→ browser_navigate(url=\"http://localhost:8080/...\") 替代 SearXNG 搜索"}
+
+    # ── v5.0 维护文件写入闸门 (R3) ──
+    if tool_name == "terminal":
+        maint_files = ("memo.md", "MAINTENANCE.md", "FAILURES.md", "DONT_DO.md", "MEMORY.md", "SOUL.md")
+        redirect_ops = (">>", " > ", "tee ", "cat >", "cat>>", "cp ", " mv ")
+        if any(mf.lower() in cmd.lower() for mf in maint_files) and any(op in cmd for op in redirect_ops):
+            return {"action": "block", "message":
+                "Maintenance file terminal write blocked. Use patch (audited diff) instead."}
+
+    # ── v5.0 Cron Lease Gate (R1+R2) ──
+    if tool_name in ("patch", "write_file", "terminal"):
+        maint_files = ("memo.md", "MAINTENANCE.md", "FAILURES.md", "DONT_DO.md", "MEMORY.md", "SOUL.md", "jobs.json")
+        is_maint = any(mf.lower() in (path or "").lower() for mf in maint_files)
+        is_maint_cmd = any(mf.lower() in cmd.lower() for mf in maint_files)
+        if is_maint or is_maint_cmd:
+            if _cron_healthy():
+                block_msg = _check_lease()
+                if block_msg:
+                    return {"action": "block", "message": f"Cron housekeeping lock active. {block_msg}"}
 
     # ── 记忆冲突 ──
     if tool_name == "terminal":
