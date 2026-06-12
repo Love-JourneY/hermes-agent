@@ -1,8 +1,24 @@
 {
   "sessions": {
     "20260612_201502_334feb": {
-      "last_msg_count": 341,
-      "last_checked": "2026-06-12T23:24:39"
+      "last_msg_count": 506,
+      "last_checked": "2026-06-12T23:56:55"
+    },
+    "20260610_163652_74c037": {
+      "last_msg_count": 34,
+      "last_checked": "2026-06-12T23:56:55"
+    },
+    "20260610_132127_1e497d": {
+      "last_msg_count": 69,
+      "last_checked": "2026-06-12T23:56:55"
+    },
+    "20260610_131454_70ee4e": {
+      "last_msg_count": 20,
+      "last_checked": "2026-06-12T23:56:55"
+    },
+    "20260610_113200_c0b3f4": {
+      "last_msg_count": 58,
+      "last_checked": "2026-06-12T23:56:55"
     }
   },
   "housekeeping_lease": {
