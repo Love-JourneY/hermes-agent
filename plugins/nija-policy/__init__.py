@@ -156,7 +156,7 @@ def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
     # 语义审计硬闸
     audit_gate = ""
     if _semantic_audit_pending:
-        remaining = [f for f in _audit_files if f not in _files_read_this_turn]
+        remaining = [f for f in _audit_files if not _files_read_this_turn.get(f, {}).get("read_full", False)]
         if remaining:
             audit_gate = (
                 "🔒 SEMANTIC AUDIT REQUIRED — 工具封锁。\\n"
@@ -264,7 +264,7 @@ def on_pre_tool_call(
 
     # ── 语义审计硬闸 ──
     if _semantic_audit_pending and tool_name in _GATED_L1:
-        remaining = [f for f in _audit_files if f not in _files_read_this_turn]
+        remaining = [f for f in _audit_files if not _files_read_this_turn.get(f, {}).get("read_full", False)]
         if remaining:
             return {
                 "action": "block",
