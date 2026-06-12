@@ -1,4 +1,4 @@
-"""Nija 策略插件 v4.1 — 硬闸门 + P0智能门 + 语义审计 + 全读闸门 + 覆盖率闸门 + SKILL STATS v4.1。
+"""Nija 策略插件 v4.2 — 硬闸门 + P0智能门 + 语义审计 + 全读闸门 + 覆盖率闸门 + SKILL STATS v4.1 + 框架工具闸门。
 
 P0 三级:
   1. 预检: read_file 过的 .md 才放行 patch | write_file 对 .md 永久封
@@ -10,7 +10,11 @@ v3.8 双闸门:
   5. 覆盖率闸门: patch 的 old_string 目标行必须在 read 覆盖范围内
   
 v4.1 回合边界冷却:
-  6. SKILL STATS GATE 只检查上回合技能——本回合永放行。鼓励单回合长任务。"""
+  6. SKILL STATS GATE 只检查上回合技能——本回合永放行。鼓励单回合长任务。
+
+v4.2 框架工具闸门:
+  7. terminal curl localhost:3002 → 🔒 → web_search/web_extract
+     terminal curl localhost:8080 → 🔒 → browser_navigate"""
 
 import os
 import re
@@ -362,6 +366,21 @@ def on_pre_tool_call(
                         "→ read_file 全篇记行数 → patch → read_file 验证行数≥改前"
                     ),
                 }
+
+    # ── v4.2 框架工具闸门: 禁止 terminal curl localhost ──
+    if tool_name == "terminal":
+        cmd = args.get("command", "")
+        if cmd and "curl" in cmd:
+            if "localhost:3002" in cmd or "127.0.0.1:3002" in cmd:
+                return {"action": "block", "message":
+                    "🔒 框架工具闸门: terminal curl localhost:3002 被拦截。\\n"
+                    "→ web_search(query=...) 替代搜索（Firecrawl 本地）\\n"
+                    "→ web_extract(urls=[...]) 替代抓取（Firecrawl 本地）\\n"
+                    "web.backend=firecrawl + FIRECRAWL_API_URL 已配置"}
+            if "localhost:8080" in cmd or "127.0.0.1:8080" in cmd:
+                return {"action": "block", "message":
+                    "🔒 框架工具闸门: terminal curl localhost:8080 被拦截。\\n"
+                    "→ browser_navigate(url=\"http://localhost:8080/...\") 替代 SearXNG 搜索"}
 
     # ── 记忆冲突 ──
     if tool_name == "terminal":
