@@ -10,6 +10,19 @@ def load_tracker():
         with open(TRACKER_PATH) as f: return json.load(f)
     except: return {}
 
+def get_user_msg_count(session_id):
+    """Count only user messages — idle detection must ignore assistant/tool msgs."""
+    try:
+        conn = sqlite3.connect(STATE_DB)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id=? AND role='user'",
+            (session_id,)
+        ).fetchone()
+        conn.close()
+        return row[0] if row else 0
+    except:
+        return 0
+
 def get_active_sessions(limit=10):
     sessions = []
     try:
@@ -37,7 +50,7 @@ def scan(limit=10):
         t = tracker_sessions.get(sid, {})
         is_active = s["ended_at"] is None
         last_count = t.get("last_msg_count", 0)
-        current_count = s["message_count"]
+        current_count = get_user_msg_count(sid)  # Only Nija's messages
         idle = (current_count == last_count)
         has_new = is_active or not t.get("last_msg_id")
         result["sessions"].append({
