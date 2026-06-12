@@ -29,23 +29,36 @@ def get_active_sessions(limit=10):
 
 def scan(limit=10):
     tracker = load_tracker()
+    tracker_sessions = tracker.get("sessions", {})
     sessions = get_active_sessions(limit)
     result = {"scanned_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "active_sessions": len(sessions), "sessions": [], "has_new": False}
     for s in sessions:
         sid = s["id"]
-        t = tracker.get(sid, {})
+        t = tracker_sessions.get(sid, {})
         is_active = s["ended_at"] is None
+        last_count = t.get("last_msg_count", 0)
+        current_count = s["message_count"]
+        idle = (current_count == last_count)
         has_new = is_active or not t.get("last_msg_id")
         result["sessions"].append({
             "id": sid, "source": s["source"],
             "ended_at": str(s["ended_at"]) if s["ended_at"] else None,
-            "msg_count": s["message_count"],
-            "last_checked_msg_id": t.get("last_msg_id"),
+            "msg_count": current_count,
+            "last_msg_count": last_count,
+            "idle": idle,
             "is_active": is_active,
             "has_new": has_new
         })
         if has_new:
             result["has_new"] = True
+        # Persist updated state for next comparison
+        tracker_sessions[sid] = {
+            "last_msg_count": current_count,
+            "last_checked": time.strftime("%Y-%m-%dT%H:%M:%S")
+        }
+    tracker["sessions"] = tracker_sessions
+    with open(TRACKER_PATH, "w") as f:
+        json.dump(tracker, f, indent=2)
     return result
 
 if __name__ == "__main__":
