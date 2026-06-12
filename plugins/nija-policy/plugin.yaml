@@ -1,6 +1,6 @@
 name: nija-policy
-version: 4.3.0
-description: "Nija 策略插件 v4.3——源码闭环审计+框架工具闸门+双闸门(全读+覆盖率)+SKILL STATS v4.1+HARD GATE+P0智能门"
+version: 4.6.0
+description: "Nija 策略插件 v4.6——execute_code加入GATED_L1法外狂徒伏法+源码闭环审计+框架工具闸门+双闸门(全读+覆盖率)+SKILL STATS v4.1+HARD GATE+P0智能门"
 hooks:
   - pre_llm_call
   - pre_tool_call
