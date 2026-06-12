@@ -170,35 +170,9 @@ def _cron_healthy():
         pass
     return True
 
-# ── v6.0 CSMA/CD Carrier Sense — embedded in pre_llm_call ──
-import sqlite3 as _sqlite3
-
-_last_user_msg_count = 0
-_housekeeping_last_triggered = 0
-_HOUSEKEEPING_COOLDOWN = 300  # 5min between housekeeping triggers
-
-def _get_user_msg_count() -> int:
-    """Count only Nija's messages in the active CLI session."""
-    try:
-        conn = _sqlite3.connect(os.path.expanduser("~/.hermes/state.db"))
-        row = conn.execute(
-            "SELECT m.session_id FROM messages m "
-            "JOIN sessions s ON m.session_id = s.id "
-            "WHERE s.source='cli' AND s.ended_at IS NULL AND m.role='user' "
-            "ORDER BY m.id DESC LIMIT 1"
-        ).fetchone()
-        if not row:
-            conn.close()
-            return 0
-        sid = row[0]
-        count = conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE session_id=? AND role='user'",
-            (sid,)
-        ).fetchone()[0]
-        conn.close()
-        return count
-    except:
-        return 0
+# v6.0 CSMA/CD Carrier Sense — time-based idle detection
+_last_response_time = 0
+_HOUSEKEEPING_COOLDOWN = 300  # 5min cooldown, then enter grab state
 
 
 def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
@@ -274,19 +248,15 @@ def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
 
     context = gate_msg + audit_gate + struct_warn + doc_sync + stale + memory_check + "---\\n"
 
-    # v6.0 CSMA/CD: Nija silence detection
-    global _last_user_msg_count, _housekeeping_last_triggered
-    current = _get_user_msg_count()
-    if _last_user_msg_count > 0 and current == _last_user_msg_count:
-        if time.time() - _housekeeping_last_triggered > _HOUSEKEEPING_COOLDOWN:
-            context += (
-                "\\n[CRON IDLE] Nija has not sent new messages since last response. "
-                "Channel is silent - do housekeeping (semantic extraction): "
-                "session_search this session, understand what changed, "
-                "patch memo/FAILURES/DONT_DO. Do this BEFORE responding.\\n"
-            )
-            _housekeeping_last_triggered = time.time()
-    _last_user_msg_count = current
+    # v6.0 CSMA/CD: Time-based — cooldown expired = grab state. Nija idle? -> housekeeping.
+    global _last_response_time
+    elapsed = time.time() - _last_response_time
+    if _last_response_time > 0 and elapsed > _HOUSEKEEPING_COOLDOWN:
+        context += (
+            f"\\n[CRON IDLE] Nija idle {int(elapsed)}s (cooldown expired). "
+            "Do housekeeping: session_search -> understand what changed "
+            "-> patch memo/FAILURES/DONT_DO. Do this BEFORE responding.\\n"
+        )
 
     _skills_loaded = False
     _web_searched = False
@@ -684,6 +654,9 @@ def on_post_tool_call(
         _consecutive_skips = 0
         _web_searched = True
 
+    # v6.0: record response time for CSMA/CD idle detection
+    global _last_response_time
+    _last_response_time = time.time()
     return None
 
 
