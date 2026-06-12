@@ -9,6 +9,7 @@ P0 三级:
 import os
 import re
 import subprocess
+import time
 from typing import Optional, Dict, Any
 
 MEMORIES = os.path.expanduser("~/.hermes/memories")
@@ -32,9 +33,10 @@ _patch_warnings = []
 _file_snapshots = {}
 _modified_files = set()
 
-# SKILL STATS: 追踪技能使用频率，用于 DIVERSITY GATE
-_skill_usage_history = {}   # {skill_name: count_in_last_10_turns}
-_recent_skills = []         # ordered list of skill names, max 10
+# SKILL STATS GATE v4.0: 时间冷却替代 FIFO 计数
+# 每技能: {skill_name: last_used_timestamp}
+_skill_timestamps: Dict[str, float] = {}
+_COOLDOWN_SECONDS = 240  # 4分钟
 
 _GATED_L1 = {"terminal", "patch", "write_file", "delegate_task"}
 _GATED_L2 = _GATED_L1 | {"read_file", "search_files"}
@@ -197,18 +199,34 @@ def on_pre_tool_call(
 
     # ── SKILL STATS GATE: 技能多样性硬约束 ──
     if tool_name in _GATED_L1 and _loaded_skills_this_turn:
-        # 检查最近10次中任一技能出现≥3次 → 过度依赖
+        # ── SKILL STATS GATE v4.0: 时间冷却 ──
         for skill in _loaded_skills_this_turn:
-            count = _skill_usage_history.get(skill, 0)
-            if count >= 3:
-                return {
-                    "action": "block",
-                    "message": (
-                        f"🔒 SKILL STATS: {skill} 在最近10次中用了{count}次——过度依赖。\n"
-                        "要解锁: 加载一个最近没用过的不同类别技能。\n"
-                        "提示: skills_list 看全量→选不常用的→skill_view 加载。"
-                    ),
-                }
+            ts = _skill_timestamps.get(skill)
+            if ts is not None:
+                elapsed = time.time() - ts
+                if elapsed < _COOLDOWN_SECONDS:
+                    temp = int((_COOLDOWN_SECONDS - elapsed) / _COOLDOWN_SECONDS * 100)
+                    if temp >= 90:
+                        return {
+                            "action": "block",
+                            "message": (
+                                f"🔒 SKILL STATS: {skill} 温度 {temp}°C — 全锁。\\n"
+                                f"冷却剩余 {_COOLDOWN_SECONDS - elapsed:.0f}秒。"
+                            ),
+                        }
+                    elif temp >= 70:
+                        msg = f"🔒 SKILL STATS: {skill} 温度 {temp}°C — terminal+patch+write 封锁。\\n冷却剩余 {_COOLDOWN_SECONDS - elapsed:.0f}秒。"
+                        if tool_name in _GATED_L1:
+                            return {"action": "block", "message": msg} if tool_name != "terminal" else {"action": "block", "message": msg}
+                    elif temp >= 50:
+                        if tool_name == "terminal":
+                            return {
+                                "action": "block",
+                                "message": (
+                                    f"🔒 SKILL STATS: {skill} 温度 {temp}°C — terminal 封锁。\\n"
+                                    f"冷却剩余 {_COOLDOWN_SECONDS - elapsed:.0f}秒。"
+                                ),
+                            }
 
     # ── 语义审计硬闸 ──
     if _semantic_audit_pending and tool_name in _GATED_L1:
@@ -300,9 +318,9 @@ def on_post_tool_call(
     **kwargs,
 ) -> Optional[str]:
     global _skills_loaded, _web_searched, _consecutive_skips, _loaded_skills_this_turn
-    global _needs_doc_sync, _last_modified_doc, _files_read_this_turn
-    global _semantic_audit_pending, _audit_files, _patch_warnings, _audit_verified, _file_snapshots, _modified_files
-    global _skill_usage_history, _recent_skills
+    global _docs_may_be_stale, _needs_doc_sync, _last_modified_doc, _files_read_this_turn
+    global _semantic_audit_pending, _audit_files, _patch_warnings, _audit_verified, _modified_files, _file_snapshots
+    global _skill_timestamps
     args = args if isinstance(args, dict) else {}
 
     if tool_name == "read_file":
@@ -410,12 +428,8 @@ def on_post_tool_call(
         skill_name = args.get("name", "")
         if skill_name and skill_name not in _loaded_skills_this_turn:
             _loaded_skills_this_turn.append(skill_name)
-            # SKILL STATS 追踪
-            _recent_skills.append(skill_name)
-            if len(_recent_skills) > 10:
-                old = _recent_skills.pop(0)
-                _skill_usage_history[old] = _skill_usage_history.get(old, 0) - 1
-            _skill_usage_history[skill_name] = _skill_usage_history.get(skill_name, 0) + 1
+            # v4.0: 记录时间戳（不追踪FIFO计数）
+            _skill_timestamps[skill_name] = time.time()
 
     if tool_name in ("web_search", "web_extract", "browser_navigate"):
         _consecutive_skips = 0
