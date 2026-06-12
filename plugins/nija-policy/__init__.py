@@ -197,13 +197,16 @@ def on_pre_tool_call(
             ),
         }
 
-    # ── SKILL STATS GATE: 技能多样性硬约束 ──
+    # ── SKILL STATS GATE v4.0: 时间冷却 ──
     if tool_name in _GATED_L1 and _loaded_skills_this_turn:
-        # ── SKILL STATS GATE v4.0: 时间冷却 ──
+        _TURN_THRESHOLD = 5  # 5秒内视为本轮首次加载，不触发冷却
         for skill in _loaded_skills_this_turn:
             ts = _skill_timestamps.get(skill)
             if ts is not None:
                 elapsed = time.time() - ts
+                # 跳过本轮首次加载（<5秒 = 本轮刚加载的）
+                if elapsed < _TURN_THRESHOLD:
+                    continue
                 if elapsed < _COOLDOWN_SECONDS:
                     temp = int((_COOLDOWN_SECONDS - elapsed) / _COOLDOWN_SECONDS * 100)
                     if temp >= 90:
