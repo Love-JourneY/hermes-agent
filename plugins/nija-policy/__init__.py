@@ -274,7 +274,8 @@ def on_pre_tool_call(
             }
 
     # ── 文件修改硬闸 ──
-    if tool_name in _GATED_L1 and _modified_files:
+    # v4.3: patch 不封锁——patch 是审计工具，用来闭环源码修改
+    if tool_name in _GATED_L1 and tool_name != "patch" and _modified_files:
         recent = sorted(_modified_files)[-6:]
         return {
             "action": "block",
@@ -515,16 +516,8 @@ def on_post_tool_call(
                             _audit_files.append(sib_path)
                     break
 
-    # v4.3: patch 成功后清除对应文件的 FILE MODIFIED 锁（源码闭环审计）
-    if tool_name == "patch":
-        path = args.get("path", args.get("file_path", ""))
-        if path:
-            norm = os.path.normpath(os.path.expanduser(path))
-            if norm in _modified_files:
-                _modified_files.discard(norm)
-
-    # ── 全机文件修改检测 ──
-    if tool_name in ("terminal", "patch", "write_file", "execute_code"):
+            # 语义审计标记
+            _semantic_audit_pending = True
         try:
             home = os.path.expanduser("~")
             result = subprocess.run(
@@ -538,6 +531,14 @@ def on_post_tool_call(
                 if line:
                     _modified_files.add(line)
         except: pass
+
+    # v4.3: patch 成功后清除对应文件的 FILE MODIFIED 锁（find之后，防重捕）
+    if tool_name == "patch":
+        path = args.get("path", args.get("file_path", ""))
+        if path:
+            norm = os.path.normpath(os.path.expanduser(path))
+            if norm in _modified_files:
+                _modified_files.discard(norm)
 
     if tool_name in ("skill_view", "skills_list", "skill_manage"):
         _consecutive_skips = 0
