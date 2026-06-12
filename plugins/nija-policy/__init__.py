@@ -403,6 +403,9 @@ def on_post_tool_call(
                     entry["total_lines"] = len(f.readlines())
             except: pass
             tl = entry["total_lines"]
+            # 裁剪到文件实际行数（防止 limit 超大导致 range 超出）
+            if tl > 0 and entry["ranges"]:
+                entry["ranges"] = [(max(1, s), min(tl, e)) for s, e in entry["ranges"]]
             entry["read_full"] = (entry["ranges"] == [(1, tl)] if tl > 0 else False)
             # 读 .md → 存快照用于 patch 后语义比较
             if norm.endswith('.md'):
