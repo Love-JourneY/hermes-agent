@@ -15,9 +15,12 @@ def get_active_sessions(limit=10):
     try:
         conn = sqlite3.connect(STATE_DB)
         for row in conn.execute(
-            "SELECT id, source, started_at, ended_at, message_count "
-            "FROM sessions WHERE ended_at IS NOT NULL "
-            "ORDER BY ended_at DESC LIMIT ?", (limit,)
+            "SELECT id, source, started_at, ended_at, message_count FROM sessions "
+            "WHERE (ended_at IS NOT NULL) "
+            "   OR (ended_at IS NULL AND source NOT IN ('cron','gateway') AND message_count > 0) "
+            "ORDER BY CASE WHEN ended_at IS NULL THEN 0 ELSE 1 END, "
+            "         COALESCE(ended_at, started_at) DESC "
+            "LIMIT ?", (limit,)
         ):
             sessions.append({"id": row[0], "source": row[1] or "", "started_at": row[2], "ended_at": row[3], "message_count": row[4] or 0})
         conn.close()
@@ -31,8 +34,18 @@ def scan(limit=10):
     for s in sessions:
         sid = s["id"]
         t = tracker.get(sid, {})
-        result["sessions"].append({"id": sid, "source": s["source"], "ended_at": str(s["ended_at"]), "msg_count": s["message_count"], "last_checked_msg_id": t.get("last_msg_id"), "has_new": True})
-        if not t.get("last_msg_id"): result["has_new"] = True
+        is_active = s["ended_at"] is None
+        has_new = is_active or not t.get("last_msg_id")
+        result["sessions"].append({
+            "id": sid, "source": s["source"],
+            "ended_at": str(s["ended_at"]) if s["ended_at"] else None,
+            "msg_count": s["message_count"],
+            "last_checked_msg_id": t.get("last_msg_id"),
+            "is_active": is_active,
+            "has_new": has_new
+        })
+        if has_new:
+            result["has_new"] = True
     return result
 
 if __name__ == "__main__":
