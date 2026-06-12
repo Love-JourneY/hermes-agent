@@ -842,6 +842,21 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
             if data.get("success") is False and "exceed the limit" in data.get("error", ""):
                 return True, " [full]"
 
+    # web_extract: show content preview instead of generic [error]
+    if tool_name == "web_extract":
+        if isinstance(data, dict) and "results" in data:
+            results = data.get("results", [])
+            if results:
+                title = results[0].get("title", "") or results[0].get("url", "")
+                content_len = len(results[0].get("content", ""))
+                if content_len > 0:
+                    return True, f" 📄 {title[:50]} ({content_len}字)"
+                else:
+                    err = results[0].get("error") or results[0].get("metadata", {}).get("error", "")
+                    if err:
+                        return True, f" ⚠️ {_trim_error(str(err))}"
+                    return True, " ⚠️ 反爬/空内容"
+
     # Structured error in JSON result (any tool that surfaces {"error": ...}).
     if isinstance(data, dict):
         err = data.get("error") or data.get("message")
