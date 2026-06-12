@@ -1,4 +1,4 @@
-"""Nija 策略插件 v4.3 — 硬闸门 + P0智能门 + 语义审计 + 全读闸门 + 覆盖率闸门 + SKILL STATS v4.1 + 框架工具闸门 + 源码闭环审计。
+"""Nija 策略插件 v4.5 — 硬闸门 + P0智能门 + 语义审计 + 全读闸门 + 覆盖率闸门 + SKILL STATS v4.1 + 框架工具闸门 + 源码闭环审计 + 内容相同豁免。
 
 P0 三级:
   1. 预检: read_file 过的 .md 才放行 patch | write_file 对 .md 永久封
@@ -48,6 +48,7 @@ _audit_verified = set()
 _patch_warnings = []
 _file_snapshots = {}
 _modified_files = set()
+_phantom_modified = set()  # v4.5: patch "identical"后防find重捕
 
 # SKILL STATS GATE v4.0: 时间冷却替代 FIFO 计数
 # 每技能: {skill_name: last_used_timestamp}
@@ -117,7 +118,7 @@ def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
     global _skills_loaded, _web_searched, _consecutive_skips
     global _needs_doc_sync, _last_modified_doc
     global _loaded_skills_this_turn, _skills_loaded_last_turn, _files_read_this_turn
-    global _semantic_audit_pending, _audit_files, _patch_warnings, _audit_verified, _file_snapshots, _modified_files
+    global _semantic_audit_pending, _audit_files, _patch_warnings, _audit_verified, _file_snapshots, _modified_files, _phantom_modified
 
     # 自评估（非关键词——上一轮的 self-rating）
 
@@ -130,6 +131,7 @@ def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
     _skills_loaded_last_turn = list(_loaded_skills_this_turn)
     _loaded_skills_this_turn = []
     _files_read_this_turn = {}
+    _phantom_modified = set()  # v4.5: 回合重置
 
     cwd = os.getcwd()
 
@@ -412,7 +414,7 @@ def on_post_tool_call(
 ) -> Optional[str]:
     global _skills_loaded, _web_searched, _consecutive_skips, _loaded_skills_this_turn
     global _docs_may_be_stale, _needs_doc_sync, _last_modified_doc, _files_read_this_turn
-    global _semantic_audit_pending, _audit_files, _patch_warnings, _audit_verified, _modified_files, _file_snapshots
+    global _semantic_audit_pending, _audit_files, _patch_warnings, _audit_verified, _modified_files, _file_snapshots, _phantom_modified
     global _skill_timestamps
     args = args if isinstance(args, dict) else {}
 
@@ -530,17 +532,19 @@ def on_post_tool_call(
                 shell=True, capture_output=True, text=True, timeout=5
             )
             for line in result.stdout.strip().split('\n'):
-                if line:
+                if line and line not in _phantom_modified:
                     _modified_files.add(line)
         except: pass
 
     # v4.3: patch 成功后清除对应文件的 FILE MODIFIED 锁（find之后，防重捕）
+    # v4.5: 内容相同时（old==new）无风险，进入幻影集防find重捕
     if tool_name == "patch":
         path = args.get("path", args.get("file_path", ""))
         if path:
             norm = os.path.normpath(os.path.expanduser(path))
             if norm in _modified_files:
                 _modified_files.discard(norm)
+                _phantom_modified.add(norm)  # v4.5: 内容相同=无风险，不再重捕
 
     if tool_name in ("skill_view", "skills_list", "skill_manage"):
         _consecutive_skips = 0
