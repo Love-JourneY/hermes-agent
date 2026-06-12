@@ -328,8 +328,10 @@ def on_pre_tool_call(
             norm = os.path.normpath(os.path.expanduser(path))
             entry = _files_read_this_turn.get(norm)
             if not entry:
-                return {"action": "block", "message":
-                    f"🔒 全读闸门: {path} 还没读过。修改前必须 read_file 读全文件。"}
+                if os.path.exists(norm):  # v4.4: 文件存在才拦，新文件放行
+                    return {"action": "block", "message":
+                        f"🔒 全读闸门: {path} 还没读过。修改前必须 read_file 读全文件。"}
+                return None  # 新文件，跳过全读检查
             if not entry.get("read_full", False):
                 total = entry.get("total_lines", "?")
                 ranges = entry.get("ranges", [])
