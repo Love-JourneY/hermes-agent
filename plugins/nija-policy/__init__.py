@@ -55,7 +55,7 @@ _phantom_modified = set()  # v4.5: patch "identical"后防find重捕
 _skill_timestamps: Dict[str, float] = {}
 _COOLDOWN_SECONDS = 240  # 4分钟
 
-_GATED_L1 = {"terminal", "patch", "write_file", "delegate_task"}
+_GATED_L1 = {"terminal", "patch", "write_file", "delegate_task", "execute_code"}
 _GATED_L2 = _GATED_L1 | {"read_file", "search_files"}
 
 # v4.3: 源码文件——被 terminal 修改后 read_file 不解锁，需 patch 闭环
