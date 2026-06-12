@@ -458,9 +458,11 @@ def on_post_tool_call(
                     pass  # 源码文件：read 不解锁，等 patch
                 else:
                     _modified_files.discard(norm)
-            # 语义审计: 全部读完 → 清除标记
+            # 语义审计: 全读才算验证通过（v4.5: 10行partial read不算数）
             if _semantic_audit_pending and _audit_files:
-                _audit_verified.add(norm)
+                entry = _files_read_this_turn.get(norm)
+                if entry and entry.get("read_full", False):
+                    _audit_verified.add(norm)
                 if _audit_verified.issuperset(_audit_files):
                     _semantic_audit_pending = False
                     _audit_files = []
