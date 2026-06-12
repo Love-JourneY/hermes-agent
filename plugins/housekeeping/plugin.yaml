@@ -1,0 +1,5 @@
+name: housekeeping
+version: 1.0.0
+description: "Blackie Housekeeping — session delta scanner + timestamp tracker + multi-dimension maintenance intelligence"
+hooks:
+  - post_tool_call
