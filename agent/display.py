@@ -829,6 +829,15 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
     if tool_name == "terminal":
         if isinstance(data, dict):
             exit_code = data.get("exit_code")
+            output = data.get("output", "")
+            # Success with output — show first and last line preview
+            if exit_code == 0 and output.strip():
+                lines = output.strip().split('\n')
+                if len(lines) == 1:
+                    preview = lines[0][:60]
+                else:
+                    preview = f"{lines[0][:30]} ... {lines[-1][:30]}"
+                return True, f" → "{preview}""
             if exit_code is not None and exit_code != 0:
                 err_msg = data.get("error")
                 if err_msg:
