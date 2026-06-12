@@ -1,4 +1,4 @@
-"""Nija 策略插件 v4.2 — 硬闸门 + P0智能门 + 语义审计 + 全读闸门 + 覆盖率闸门 + SKILL STATS v4.1 + 框架工具闸门。
+"""Nija 策略插件 v4.3 — 硬闸门 + P0智能门 + 语义审计 + 全读闸门 + 覆盖率闸门 + SKILL STATS v4.1 + 框架工具闸门 + 源码闭环审计。
 
 P0 三级:
   1. 预检: read_file 过的 .md 才放行 patch | write_file 对 .md 永久封
@@ -14,7 +14,12 @@ v4.1 回合边界冷却:
 
 v4.2 框架工具闸门:
   7. terminal curl localhost:3002 → 🔒 → web_search/web_extract
-     terminal curl localhost:8080 → 🔒 → browser_navigate"""
+     terminal curl localhost:8080 → 🔒 → browser_navigate
+
+v4.3 源码闭环审计:
+  8. 源码文件(.py/.md/.yaml等)被terminal修改→ FILE MODIFIED 锁
+     → read_file 不解锁 → 必须用 patch 记录变更 → 自动解锁
+     非源码文件(jobs.json/memo.md) read_file 即解锁"""
 
 import os
 import re
@@ -51,6 +56,9 @@ _COOLDOWN_SECONDS = 240  # 4分钟
 
 _GATED_L1 = {"terminal", "patch", "write_file", "delegate_task"}
 _GATED_L2 = _GATED_L1 | {"read_file", "search_files"}
+
+# v4.3: 源码文件——被 terminal 修改后 read_file 不解锁，需 patch 闭环
+_SOURCE_EXTS = (".py", ".md", ".yaml", ".yml", ".json", ".sh", ".toml", ".cfg")
 
 # execute_code 独立管理——不能和 terminal/patch 一样"加载技能就解锁"
 # 只有明确允许的技能（如 self-test-protocol）才能放行 execute_code
@@ -438,9 +446,13 @@ def on_post_tool_call(
                         'line_count': len(lines)
                     }
                 except: pass
-            # 清除已读的修改文件
+            # v4.3: 源码文件不因 read_file 解锁——需 patch 闭环审计
+            # 非源码文件（jobs.json, memo.md 等）读就放行
             if norm in _modified_files:
-                _modified_files.discard(norm)
+                if any(norm.endswith(ext) for ext in _SOURCE_EXTS):
+                    pass  # 源码文件：read 不解锁，等 patch
+                else:
+                    _modified_files.discard(norm)
             # 语义审计: 全部读完 → 清除标记
             if _semantic_audit_pending and _audit_files:
                 _audit_verified.add(norm)
@@ -502,6 +514,14 @@ def on_post_tool_call(
                         if sib_path not in _audit_files:
                             _audit_files.append(sib_path)
                     break
+
+    # v4.3: patch 成功后清除对应文件的 FILE MODIFIED 锁（源码闭环审计）
+    if tool_name == "patch":
+        path = args.get("path", args.get("file_path", ""))
+        if path:
+            norm = os.path.normpath(os.path.expanduser(path))
+            if norm in _modified_files:
+                _modified_files.discard(norm)
 
     # ── 全机文件修改检测 ──
     if tool_name in ("terminal", "patch", "write_file", "execute_code"):
