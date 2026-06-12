@@ -462,6 +462,8 @@ def on_pre_tool_call(
 
     # ── v5.0 Cron Lease Gate (R1+R2) ──
     if tool_name in ("patch", "write_file", "terminal"):
+        path = args.get("path", args.get("file_path", ""))
+        cmd = args.get("command", "")
         maint_files = ("memo.md", "MAINTENANCE.md", "FAILURES.md", "DONT_DO.md", "MEMORY.md", "SOUL.md", "jobs.json")
         is_maint = any(mf.lower() in (path or "").lower() for mf in maint_files)
         is_maint_cmd = any(mf.lower() in cmd.lower() for mf in maint_files)
