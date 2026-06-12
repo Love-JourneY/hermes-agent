@@ -1,10 +1,16 @@
-"""Nija 策略插件 v2.9 — 硬闸门 + P0智能门 + 语义审计硬闸。
+"""Nija 策略插件 v4.1 — 硬闸门 + P0智能门 + 语义审计 + 全读闸门 + 覆盖率闸门 + SKILL STATS v4.1。
 
 P0 三级:
   1. 预检: read_file 过的 .md 才放行 patch | write_file 对 .md 永久封
   2. 结构审计: patch 后自动检测行数/标题/索引/链接
   3. 语义审计: patch .md → 标记 _semantic_audit_pending → 下轮封锁直到 read_file 验证
-"""
+
+v3.8 双闸门:
+  4. 全读闸门: patch/write_file 前必须本回合读过全文件
+  5. 覆盖率闸门: patch 的 old_string 目标行必须在 read 覆盖范围内
+  
+v4.1 回合边界冷却:
+  6. SKILL STATS GATE 只检查上回合技能——本回合永放行。鼓励单回合长任务。"""
 
 import os
 import re
@@ -25,7 +31,8 @@ _docs_may_be_stale = False
 _needs_doc_sync = False
 _last_modified_doc = ""
 _loaded_skills_this_turn = []
-_files_read_this_turn = []
+_skills_loaded_last_turn = []  # v4.1: 上回合的技能（回合边界冷却检查）
+_files_read_this_turn: Dict[str, Dict] = {}  # v3.8: {path: {"ranges":[(s,e)], "total_lines":N, "read_full":bool}}
 _semantic_audit_pending = False
 _audit_files = []
 _audit_verified = set()
@@ -66,6 +73,20 @@ def _resolve_audit_path(sibling_name: str) -> str:
     return os.path.join(MEMORIES, sibling_name)
 
 
+def _merge_ranges(ranges):
+    """合并重叠/相邻的行范围，返回 [(start, end), ...]。"""
+    if not ranges: return []
+    sorted_ranges = sorted(ranges)
+    merged = [sorted_ranges[0]]
+    for s, e in sorted_ranges[1:]:
+        ls, le = merged[-1]
+        if s <= le + 1:
+            merged[-1] = (ls, max(le, e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
 def _grep_memory(keyword: str) -> str:
     try:
         result = subprocess.run(
@@ -83,7 +104,7 @@ def _grep_memory(keyword: str) -> str:
 def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
     global _skills_loaded, _web_searched, _consecutive_skips
     global _needs_doc_sync, _last_modified_doc
-    global _loaded_skills_this_turn, _files_read_this_turn
+    global _loaded_skills_this_turn, _skills_loaded_last_turn, _files_read_this_turn
     global _semantic_audit_pending, _audit_files, _patch_warnings, _audit_verified, _file_snapshots, _modified_files
 
     # 自评估（非关键词——上一轮的 self-rating）
@@ -93,8 +114,10 @@ def on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
     else:
         _consecutive_skips = 0
 
+    # v4.1: 回合边界——上回合的技能进冷却池，本回合清空
+    _skills_loaded_last_turn = list(_loaded_skills_this_turn)
     _loaded_skills_this_turn = []
-    _files_read_this_turn = []
+    _files_read_this_turn = {}
 
     cwd = os.getcwd()
 
@@ -197,16 +220,13 @@ def on_pre_tool_call(
             ),
         }
 
-    # ── SKILL STATS GATE v4.0: 时间冷却 ──
-    if tool_name in _GATED_L1 and _loaded_skills_this_turn:
-        _TURN_THRESHOLD = 5  # 5秒内视为本轮首次加载，不触发冷却
-        for skill in _loaded_skills_this_turn:
+    # ── SKILL STATS GATE v4.1: 回合边界冷却 ──
+    # 只检查上回合技能——本回合 skill_view 加载的技能永放行
+    if tool_name in _GATED_L1 and _skills_loaded_last_turn:
+        for skill in _skills_loaded_last_turn:
             ts = _skill_timestamps.get(skill)
             if ts is not None:
                 elapsed = time.time() - ts
-                # 跳过本轮首次加载（<5秒 = 本轮刚加载的）
-                if elapsed < _TURN_THRESHOLD:
-                    continue
                 if elapsed < _COOLDOWN_SECONDS:
                     temp = int((_COOLDOWN_SECONDS - elapsed) / _COOLDOWN_SECONDS * 100)
                     if temp >= 90:
@@ -218,18 +238,15 @@ def on_pre_tool_call(
                             ),
                         }
                     elif temp >= 70:
-                        msg = f"🔒 SKILL STATS: {skill} 温度 {temp}°C — terminal+patch+write 封锁。\\n冷却剩余 {_COOLDOWN_SECONDS - elapsed:.0f}秒。"
                         if tool_name in _GATED_L1:
-                            return {"action": "block", "message": msg} if tool_name != "terminal" else {"action": "block", "message": msg}
+                            return {"action": "block", "message":
+                                f"🔒 SKILL STATS: {skill} 温度 {temp}°C — terminal+patch+write 封锁。\\n"
+                                f"冷却剩余 {_COOLDOWN_SECONDS - elapsed:.0f}秒。"}
                     elif temp >= 50:
                         if tool_name == "terminal":
-                            return {
-                                "action": "block",
-                                "message": (
-                                    f"🔒 SKILL STATS: {skill} 温度 {temp}°C — terminal 封锁。\\n"
-                                    f"冷却剩余 {_COOLDOWN_SECONDS - elapsed:.0f}秒。"
-                                ),
-                            }
+                            return {"action": "block", "message":
+                                f"🔒 SKILL STATS: {skill} 温度 {temp}°C — terminal 封锁。\\n"
+                                f"冷却剩余 {_COOLDOWN_SECONDS - elapsed:.0f}秒。"}
 
     # ── 语义审计硬闸 ──
     if _semantic_audit_pending and tool_name in _GATED_L1:
@@ -290,6 +307,49 @@ def on_pre_tool_call(
                 ),
             }
 
+    # ── v3.8 全读闸门 ──
+    # patch/write_file 前必须本回合读过全文件
+    if tool_name in ("patch", "write_file"):
+        path = args.get("path", args.get("file_path", ""))
+        if path:
+            norm = os.path.normpath(os.path.expanduser(path))
+            entry = _files_read_this_turn.get(norm)
+            if not entry:
+                return {"action": "block", "message":
+                    f"🔒 全读闸门: {path} 还没读过。修改前必须 read_file 读全文件。"}
+            if not entry.get("read_full", False):
+                total = entry.get("total_lines", "?")
+                ranges = entry.get("ranges", [])
+                lines_read = sum(e - s + 1 for s, e in ranges)
+                pct = int(lines_read / total * 100) if total > 0 else 0
+                return {"action": "block", "message":
+                    f"🔒 全读闸门: {path} 共{total}行，只读了{lines_read}行({pct}%)。读完再改。"}
+
+    # ── v3.8 覆盖率闸门 ──
+    # patch 的 old_string 目标行必须在 read 覆盖范围内
+    if tool_name == "patch":
+        path = args.get("path", args.get("file_path", ""))
+        old_str = args.get("old_string", "")
+        if path and old_str:
+            norm = os.path.normpath(os.path.expanduser(path))
+            entry = _files_read_this_turn.get(norm)
+            if entry:
+                try:
+                    with open(norm) as f:
+                        file_lines = f.read().split('\n')
+                    ol = old_str.split('\n')[0].strip()
+                    target = None
+                    for i, line in enumerate(file_lines, 1):
+                        if ol in line: target = i; break
+                    if target:
+                        ranges = entry.get("ranges", [])
+                        covered = any(s <= target <= e for s, e in ranges)
+                        if not covered:
+                            rs = ", ".join(f"{s}-{e}" for s, e in ranges)
+                            return {"action": "block", "message":
+                                f"🔒 覆盖率闸门: 只读了{rs}行，修改目标在第{target}行——超出覆盖范围。"}
+                except: pass
+
     if tool_name == "patch":
         path = args.get("path", args.get("file_path", ""))
         if path and ".md" in path:
@@ -330,8 +390,20 @@ def on_post_tool_call(
         path = args.get("path", "")
         if path:
             norm = os.path.normpath(os.path.expanduser(path))
+            # v3.8: 初始化条目（dict 而非 list）
             if norm not in _files_read_this_turn:
-                _files_read_this_turn.append(norm)
+                _files_read_this_turn[norm] = {"ranges": [], "total_lines": 0, "read_full": False}
+            entry = _files_read_this_turn[norm]
+            offset = args.get("offset", 1)
+            limit_val = args.get("limit", 500)
+            entry["ranges"].append((offset, offset + limit_val - 1))
+            entry["ranges"] = _merge_ranges(entry["ranges"])
+            try:
+                with open(norm) as f:
+                    entry["total_lines"] = len(f.readlines())
+            except: pass
+            tl = entry["total_lines"]
+            entry["read_full"] = (entry["ranges"] == [(1, tl)] if tl > 0 else False)
             # 读 .md → 存快照用于 patch 后语义比较
             if norm.endswith('.md'):
                 try:
@@ -429,9 +501,10 @@ def on_post_tool_call(
         _consecutive_skips = 0
         _skills_loaded = True
         skill_name = args.get("name", "")
-        if skill_name and skill_name not in _loaded_skills_this_turn:
-            _loaded_skills_this_turn.append(skill_name)
-            # v4.0: 记录时间戳（不追踪FIFO计数）
+        if skill_name:
+            if skill_name not in _loaded_skills_this_turn:
+                _loaded_skills_this_turn.append(skill_name)
+            # v3.8: 每次加载都刷新时间戳——不管是不是新技能
             _skill_timestamps[skill_name] = time.time()
 
     if tool_name in ("web_search", "web_extract", "browser_navigate"):
