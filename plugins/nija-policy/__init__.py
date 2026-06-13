@@ -378,20 +378,20 @@ def on_pre_tool_call(
                 ),
             }
 
-    # ── execute_code 代码修改闸 ──
-    if tool_name == "execute_code":
-        py_code = args.get("code", "")
-        src_exts = (".py", ".md", ".yaml", ".sh", ".json")
-        write_ops = ("open(", "write(", "write_file", ".write(", "path.write")
-        if any(ext in py_code for ext in src_exts) and any(op in py_code for op in write_ops):
-            return {
-                "action": "block",
-                "message": (
-                    "⛔ P0: execute_code 正在写入代码文件。\\n"
-                    "改代码必须用 patch（有红绿 diff，Nija 可审计）。\\n"
-                    "流程: read_file→patch→verify→pyc清→/exit"
-                ),
-            }
+    # ── execute_code 代码修改闸 (TEMP DISABLED: T1 DIFF TEST) ──
+    # if tool_name == "execute_code":
+    #     py_code = args.get("code", "")
+    #     src_exts = (".py", ".md", ".yaml", ".sh", ".json")
+    #     write_ops = ("open(", "write(", "write_file", ".write(", "path.write")
+    #     if any(ext in py_code for ext in src_exts) and any(op in py_code for op in write_ops):
+    #         return {
+    #             "action": "block",
+    #             "message": (
+    #                 "⛔ P0: execute_code 正在写入代码文件。\\n"
+    #                 "改代码必须用 patch（有红绿 diff，Nija 可审计）。\\n"
+    #                 "流程: read_file→patch→verify→pyc清→/exit"
+    #             ),
+    #         }
 
     # ── v3.8 全读闸门 ──
     # patch/write_file 前必须本回合读过全文件

@@ -6,11 +6,11 @@
     },
     "20260610_163652_74c037": {
       "last_msg_count": 1,
-      "last_checked": "2026-06-13T02:56:35"
+      "last_checked": "2026-06-13T08:34:22"
     },
     "20260610_132127_1e497d": {
       "last_msg_count": 1,
-      "last_checked": "2026-06-13T02:56:35"
+      "last_checked": "2026-06-13T08:34:22"
     },
     "20260610_131454_70ee4e": {
       "last_msg_count": 1,
@@ -25,12 +25,12 @@
       "last_checked": "2026-06-13T01:30:30"
     },
     "20260613_020357_96aafa": {
-      "last_msg_count": 19,
-      "last_checked": "2026-06-13T02:56:35"
+      "last_msg_count": 31,
+      "last_checked": "2026-06-13T08:34:22"
     }
   },
   "housekeeping_lease": {
     "expires_at": 0,
-    "last_run": 0
+    "last_run": 1749802625
   }
 }
