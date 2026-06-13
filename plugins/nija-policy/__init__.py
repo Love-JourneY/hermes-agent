@@ -346,19 +346,28 @@ def on_pre_tool_call(
                 ),
             }
 
-    # ── 文件修改硬闸 ──
-    # v4.3: patch 不封锁——patch 是审计工具，用来闭环源码修改
+    # ── 文件修改硬闸 (v4.9: per-file, no path exemption) ──
+    # 所有文件全读后才能改——不分路径。全读闸门(L406)已按文件检查。
+    # terminal: 无明确目标→全封，引导用 read_file→patch
     if tool_name in _GATED_L1 and tool_name != "patch" and _modified_files:
-        recent = sorted(_modified_files)[-6:]
-        return {
-            "action": "block",
-            "message": (
-                f"🔒 FILE MODIFIED: {tool_name} 封锁。\\n"
-                f"检测到 {len(_modified_files)} 个文件被修改:\\n"
+        target = args.get("path", args.get("file_path", ""))
+        if target:
+            norm = os.path.normpath(os.path.expanduser(target))
+            if norm in _modified_files:
+                entry = _files_read_this_turn.get(norm)
+                if not entry or not entry.get("read_full", False):
+                    return {"action": "block", "message": (
+                        f"🔒 FILE MODIFIED: {target} 被其他工具修改过。\\n"
+                        f"→ read_file {target} 审计变更后才能修改。"
+                    )}
+        # terminal 无明确目标路径→全封
+        if tool_name == "terminal":
+            recent = sorted(_modified_files)[-6:]
+            return {"action": "block", "message": (
+                f"🔒 FILE MODIFIED: terminal 封锁。{len(_modified_files)} 个文件被修改:\\n"
                 + "\\n".join(f"  → {f}" for f in recent)
-                + f"\\n→ read_file 逐个审计 → 全部验证后解锁"
-            ),
-        }
+                + f"\\n→ 用 read_file→patch 替代 terminal 修改操作。"
+            )}
 
     # ── 渐进闸门 ──
     if level >= 3:
@@ -378,20 +387,20 @@ def on_pre_tool_call(
                 ),
             }
 
-    # ── execute_code 代码修改闸 (TEMP DISABLED: T1 DIFF TEST) ──
-    # if tool_name == "execute_code":
-    #     py_code = args.get("code", "")
-    #     src_exts = (".py", ".md", ".yaml", ".sh", ".json")
-    #     write_ops = ("open(", "write(", "write_file", ".write(", "path.write")
-    #     if any(ext in py_code for ext in src_exts) and any(op in py_code for op in write_ops):
-    #         return {
-    #             "action": "block",
-    #             "message": (
-    #                 "⛔ P0: execute_code 正在写入代码文件。\\n"
-    #                 "改代码必须用 patch（有红绿 diff，Nija 可审计）。\\n"
-    #                 "流程: read_file→patch→verify→pyc清→/exit"
-    #             ),
-    #         }
+    # ── execute_code 代码修改闸 ──
+    if tool_name == "execute_code":
+        py_code = args.get("code", "")
+        src_exts = (".py", ".md", ".yaml", ".sh", ".json")
+        write_ops = ("open(", "write(", "write_file", ".write(", "path.write")
+        if any(ext in py_code for ext in src_exts) and any(op in py_code for op in write_ops):
+            return {
+                "action": "block",
+                "message": (
+                    "⛔ P0: execute_code 正在写入代码文件。\\n"
+                    "改代码必须用 patch（有红绿 diff，Nija 可审计）。\\n"
+                    "流程: read_file→patch→verify→pyc清→/exit"
+                ),
+            }
 
     # ── v3.8 全读闸门 ──
     # patch/write_file 前必须本回合读过全文件
