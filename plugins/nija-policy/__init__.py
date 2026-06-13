@@ -616,6 +616,11 @@ def on_post_tool_call(
 
             # 语义审计标记
             _semantic_audit_pending = True
+
+    # v4.7: find -mmin -1 对所有写工具扫描（terminal/patch/write_file/execute_code）
+    # 之前只对patch扫描→execute_code内部hermes_tools改的文件不进_modified_files→FILE MODIFIED不封锁
+    # 移到patch块外：不猜execute_code内部做了什么，只看磁盘上什么文件被改了
+    if tool_name in ("terminal", "patch", "write_file", "execute_code"):
         try:
             home = os.path.expanduser("~")
             result = subprocess.run(
