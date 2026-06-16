@@ -3199,7 +3199,7 @@ def github_model_reasoning_efforts(
 def probe_api_models(
     api_key: Optional[str],
     base_url: Optional[str],
-    timeout: float = 5.0,
+    timeout: float = 15.0,
     api_mode: Optional[str] = None,
 ) -> dict[str, Any]:
     """Probe a ``/models`` endpoint with light URL heuristics.
@@ -3277,7 +3277,7 @@ def probe_api_models(
 def fetch_api_models(
     api_key: Optional[str],
     base_url: Optional[str],
-    timeout: float = 5.0,
+    timeout: float = 15.0,
     api_mode: Optional[str] = None,
 ) -> Optional[list[str]]:
     """Fetch the list of available model IDs from the provider's ``/models`` endpoint.
@@ -3384,7 +3384,7 @@ def fetch_ollama_cloud_models(
 
     live_models: list[str] = []
     if api_key:
-        result = fetch_api_models(api_key, base_url, timeout=8.0)
+        result = fetch_api_models(api_key, base_url, timeout=15.0)
         if result:
             live_models = result
 

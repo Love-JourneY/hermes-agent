@@ -1194,7 +1194,7 @@ def _query_local_context_length(model: str, base_url: str, api_key: str = "") ->
         server_type = None
 
     try:
-        with httpx.Client(timeout=3.0, headers=headers) as client:
+        with httpx.Client(timeout=15.0, headers=headers) as client:
             # Ollama: /api/show returns model details with context info
             if server_type == "ollama":
                 resp = client.post(f"{server_url}/api/show", json={"name": model})
