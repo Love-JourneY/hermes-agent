@@ -1,0 +1,94 @@
+From 1e016991152104ffb776ea706537968480aed336 Mon Sep 17 00:00:00 2001
+From: Love-JourneY <169901027+Love-JourneY@users.noreply.github.com>
+Date: Wed, 10 Jun 2026 22:18:41 +0800
+Subject: [PATCH] feat(todo): show red/green diff on todo write operations
+
+- Computes old/new diff for merge mode (status/content changes,
+  new items, removed items) and full-replace mode
+- Formats as - [old_status] / + [new_status] lines
+- Registered in agent/display.py extract_edit_diff for
+  inline red(-) / green(+) rendering in CLI
+---
+ agent/display.py   |  7 +++++++
+ tools/todo_tool.py | 30 ++++++++++++++++++++++++++++--
+ 2 files changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/agent/display.py b/agent/display.py
+index 96b2c92..47d2f17 100644
+--- a/agent/display.py
++++ b/agent/display.py
+@@ -418,6 +418,13 @@ def extract_edit_diff(
+             if isinstance(diff, str) and diff.strip():
+                 return diff
+ 
++    if tool_name == "todo" and result:
++        data = safe_json_loads(result)
++        if isinstance(data, dict):
++            diff = data.get("diff")
++            if isinstance(diff, str) and diff.strip():
++                return diff
++
+     if tool_name not in {"write_file", "patch", "skill_manage"}:
+         return None
+     if not _result_succeeded(result):
+diff --git a/tools/todo_tool.py b/tools/todo_tool.py
+index 960dab6..cdd5554 100644
+--- a/tools/todo_tool.py
++++ b/tools/todo_tool.py
+@@ -204,9 +204,32 @@ def todo_tool(
+         return tool_error("TodoStore not initialized")
+ 
+     if todos is not None:
++        old_items = {i["id"]: dict(i) for i in store.read()} if merge else {}
+         items = store.write(todos, merge)
++        # Build diff for write operations
++        diff_lines = []
++        if merge:
++            for item in items:
++                iid = item["id"]
++                old = old_items.get(iid)
++                if old is None:
++                    diff_lines.append(f"+ [{item['status']}] {item['content']}")
++                elif old["status"] != item["status"]:
++                    diff_lines.append(f"- [{old['status']}] {old['content']}")
++                    diff_lines.append(f"+ [{item['status']}] {item['content']}")
++                elif old["content"] != item["content"]:
++                    diff_lines.append(f"- [{old['status']}] {old['content']}")
++                    diff_lines.append(f"+ [{item['status']}] {item['content']}")
++            # Detect removed items
++            new_ids = {i["id"] for i in items}
++            for oid, old in old_items.items():
++                if oid not in new_ids:
++                    diff_lines.append(f"- [{old['status']}] {old['content']}")
++        elif len(items) > 0:
++            diff_lines = [f"+ [{i['status']}] {i['content']}" for i in items]
+     else:
+         items = store.read()
++        diff_lines = []
+ 
+     # Build summary counts
+     pending = sum(1 for i in items if i["status"] == "pending")
+@@ -214,7 +237,7 @@ def todo_tool(
+     completed = sum(1 for i in items if i["status"] == "completed")
+     cancelled = sum(1 for i in items if i["status"] == "cancelled")
+ 
+-    return json.dumps({
++    result = {
+         "todos": items,
+         "summary": {
+             "total": len(items),
+@@ -223,7 +246,10 @@ def todo_tool(
+             "completed": completed,
+             "cancelled": cancelled,
+         },
+-    }, ensure_ascii=False)
++    }
++    if diff_lines:
++        result["diff"] = "\\n".join(diff_lines)
++    return json.dumps(result, ensure_ascii=False)
+ 
+ 
+ def check_todo_requirements() -> bool:
+-- 
+2.53.0
+

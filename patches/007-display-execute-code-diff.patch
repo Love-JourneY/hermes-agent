@@ -1,0 +1,50 @@
+From 7ab11d39cd7a747fee4b695c94aab79ebd36b55e Mon Sep 17 00:00:00 2001
+From: Love-JourneY <169901027+Love-JourneY@users.noreply.github.com>
+Date: Fri, 12 Jun 2026 19:02:17 +0800
+Subject: [PATCH] =?UTF-8?q?fix(display):=20web=5Fextract=20preview=20?=
+ =?UTF-8?q?=E2=80=94=20show=20content=20snippet,=20english=20units?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Replace 字 → chars (global project standard)
+- Show first 50 chars of content instead of just title + count
+- Format: 📄 "Example Domain === This domain is for use..." (180 chars)
+
+Old: 📄 Example Domain (180字)
+New: 📄 "Example Domain === This domain is for use..." (180 chars)
+---
+ agent/display.py | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/agent/display.py b/agent/display.py
+index 67b1d36..2e6e198 100644
+--- a/agent/display.py
++++ b/agent/display.py
+@@ -837,7 +837,7 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
+                     preview = lines[0][:60]
+                 else:
+                     preview = f"{lines[0][:30]} ... {lines[-1][:30]}"
+-                return True, f" → "{preview}""
++                return True, f" → {preview}"
+             if exit_code is not None and exit_code != 0:
+                 err_msg = data.get("error")
+                 if err_msg:
+@@ -856,10 +856,11 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
+         if isinstance(data, dict) and "results" in data:
+             results = data.get("results", [])
+             if results:
+-                title = results[0].get("title", "") or results[0].get("url", "")
+-                content_len = len(results[0].get("content", ""))
++                content = results[0].get("content", "")
++                content_len = len(content)
+                 if content_len > 0:
+-                    return True, f" 📄 {title[:50]} ({content_len}字)"
++                    snippet = content[:50].replace('\n', ' ').strip()
++                    return True, f" 📄 \"{snippet}...\" ({content_len} chars)"
+                 else:
+                     err = results[0].get("error") or results[0].get("metadata", {}).get("error", "")
+                     if err:
+-- 
+2.53.0
+

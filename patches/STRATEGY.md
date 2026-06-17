@@ -37,14 +37,22 @@ git push origin local-patches                  # 3. 备份到 fork
 
 local-patches 分支在 fork 上备份，但**绝不**提 PR 给 upstream。
 
-## 补丁列表
+## 补丁列表（一个 commit 一个 .patch）
 
-| commit | 内容 | 上游状态 |
-|--------|------|---------|
-| `5d5f139` | fix(display): execute_code diff 渲染到 TUI | 本地热补丁 |
-| `4a8dc8e` | fix(provider): model listing timeout 15s | 本地热补丁 |
-| `7ab11d3` | fix(display): web_extract 预览内容片段 | 本地热补丁 |
-| `4b3b2a8` | feat(display): terminal 首尾行回显 | 本地热补丁 |
-| `c9efa13` | feat(tools): web_tools firecrawl 超时 + execute_code 闸门 | 本地热补丁 |
+| commit | .patch 文件 | 内容 | 上游状态 |
+|--------|------------|------|---------|
+| `5d5f139` | 007-display-execute-code-diff.patch | execute_code diff 渲染 TUI | 本地热补丁 |
+| `4a8dc8e` | 001-provider-model-listing-timeout.patch | model listing timeout 15s | 本地热补丁 |
+| `7ab11d3` | 006-display-web-extract-preview.patch | web_extract 英文片段预览 | 本地热补丁 |
+| `4b3b2a8` | 005-display-terminal-echo.patch | terminal 首尾行回显 | 本地热补丁 |
+| `22cadee` | 002-display-web-extract-hotfix.patch | web_extract 内容预览 hotfix | 本地热补丁 |
+| `24b8038` | 003-display-json-diff-refactor.patch | JSON diff 提取重构 | 本地热补丁 |
+| `b766e40` | 004-display-pr1-baseline-sync.patch | display PR1 baseline 同步 | 本地热补丁 |
+| `488f1a0` | 008-tools-memory-diff.patch | memory diff 输出 | 本地热补丁 |
+| `1e01699` | 009-tools-todo-diff.patch | todo diff 输出 | 本地热补丁 |
+| `c9efa13` | 010-tools-firecrawl-timeout.patch | web_tools 超时 | 本地热补丁 |
+| `c01a6e0` | 011-tools-cron-diff.patch | cron job diff 输出 | 本地热补丁 |
+| `4908882` | 012-tools-skill-manage-diff.patch | skill_manage diff 输出 | 本地热补丁 |
+| `6834b6a` | 013-agent-background-review.patch | background_review read_file 权限 | PR #41469 approved |
 | 待定（多commit） | feat(tools): cron/memory/todo/skill diff 输出 | 本地热补丁 |
 | 待定（#41469） | fix(agent): background_review read_file 白名单 | PR #41469 approved |

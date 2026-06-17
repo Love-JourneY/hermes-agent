@@ -1,0 +1,79 @@
+From 4908882de009cd73405ac08c98cba3b50a109e97 Mon Sep 17 00:00:00 2001
+From: Love-JourneY <169901027+Love-JourneY@users.noreply.github.com>
+Date: Wed, 10 Jun 2026 22:30:46 +0800
+Subject: [PATCH] feat(diff): add red/green diff to memory replace/remove,
+ cronjob remove, skill_manage delete/remove_file
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- memory_tool.py: _success_response accepts diff kwarg;
+  replace shows - old / + new; remove shows - removed entry
+- cronjob_tools.py: remove returns diff with name+schedule+id
+- skill_manager_tool.py: delete/remove_file return diff with
+  skill name+path / file path
+- agent/display.py: register memory in extract_edit_diff
+
+Completes all 3 planned tools from diff PR scope:
+  1. memory replace ✅
+  2. cronjob remove ✅
+  3. skill_manage delete/remove_file ✅
+---
+ agent/display.py            | 7 +++++++
+ tools/cronjob_tools.py      | 1 +
+ tools/skill_manager_tool.py | 2 ++
+ 3 files changed, 10 insertions(+)
+
+diff --git a/agent/display.py b/agent/display.py
+index 47d2f17..56b92e4 100644
+--- a/agent/display.py
++++ b/agent/display.py
+@@ -425,6 +425,13 @@ def extract_edit_diff(
+             if isinstance(diff, str) and diff.strip():
+                 return diff
+ 
++    if tool_name == "memory" and result:
++        data = safe_json_loads(result)
++        if isinstance(data, dict):
++            diff = data.get("diff")
++            if isinstance(diff, str) and diff.strip():
++                return diff
++
+     if tool_name not in {"write_file", "patch", "skill_manage"}:
+         return None
+     if not _result_succeeded(result):
+diff --git a/tools/cronjob_tools.py b/tools/cronjob_tools.py
+index 2de7b55..18c8c20 100644
+--- a/tools/cronjob_tools.py
++++ b/tools/cronjob_tools.py
+@@ -620,6 +620,7 @@ def cronjob(
+                         "name": job["name"],
+                         "schedule": job.get("schedule_display"),
+                     },
++                    "diff": f"- name: {job['name']}\n- schedule: {job.get('schedule_display', '?')}\n- id: {job_id}",
+                 },
+                 indent=2,
+             )
+diff --git a/tools/skill_manager_tool.py b/tools/skill_manager_tool.py
+index c131db9..5380464 100644
+--- a/tools/skill_manager_tool.py
++++ b/tools/skill_manager_tool.py
+@@ -720,6 +720,7 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
+     return {
+         "success": True,
+         "message": message,
++        "diff": f"- skill: {name}\n- path: {skill_dir}",
+     }
+ 
+ 
+@@ -815,6 +816,7 @@ def _remove_file(name: str, file_path: str) -> Dict[str, Any]:
+     return {
+         "success": True,
+         "message": f"File '{file_path}' removed from skill '{name}'.",
++        "diff": f"- {file_path} (from skill: {name})",
+     }
+ 
+ 
+-- 
+2.53.0
+

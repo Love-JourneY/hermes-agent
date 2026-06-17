@@ -1,0 +1,58 @@
+From 4b3b2a83b8f61b41ffb0fadfd573b4d4ffdbb239 Mon Sep 17 00:00:00 2001
+From: Love-JourneY <169901027+Love-JourneY@users.noreply.github.com>
+Date: Fri, 12 Jun 2026 18:35:54 +0800
+Subject: [PATCH] =?UTF-8?q?feat(display):=20terminal=20success=20output=20?=
+ =?UTF-8?q?echo=20=E2=80=94=20first=20and=20last=20line=20preview?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- _detect_tool_failure: when terminal exit_code=0 and output exists,
+  show '→ "first_line ... last_line"' preview on the TUI completion line
+- Single-line output shows full line (up to 60 chars)
+- Multi-line output shows first 30 ... last 30
+- Fixed display.py escape issue in the web_extract patch block
+
+complements: web_extract content preview (22cadee)
+related: nija-policy v4.3 源码闭环审计
+---
+ agent/display.py                | 9 +++++++++
+ plugins/nija-policy/plugin.yaml | 4 ++--
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/agent/display.py b/agent/display.py
+index 31b2c73..67b1d36 100644
+--- a/agent/display.py
++++ b/agent/display.py
+@@ -829,6 +829,15 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
+     if tool_name == "terminal":
+         if isinstance(data, dict):
+             exit_code = data.get("exit_code")
++            output = data.get("output", "")
++            # Success with output — show first and last line preview
++            if exit_code == 0 and output.strip():
++                lines = output.strip().split('\n')
++                if len(lines) == 1:
++                    preview = lines[0][:60]
++                else:
++                    preview = f"{lines[0][:30]} ... {lines[-1][:30]}"
++                return True, f" → "{preview}""
+             if exit_code is not None and exit_code != 0:
+                 err_msg = data.get("error")
+                 if err_msg:
+diff --git a/plugins/nija-policy/plugin.yaml b/plugins/nija-policy/plugin.yaml
+index 5a01afa..197a9ba 100644
+--- a/plugins/nija-policy/plugin.yaml
++++ b/plugins/nija-policy/plugin.yaml
+@@ -1,6 +1,6 @@
+ name: nija-policy
+-version: 4.1.0
+-description: "Nija 策略插件 v4.1——双闸门(全读+覆盖率)+SKILL STATS v4.1回合边界冷却+时间戳刷新+HARD GATE+P0智能门+语义审计"
++version: 4.3.0
++description: "Nija 策略插件 v4.3——源码闭环审计+框架工具闸门+双闸门(全读+覆盖率)+SKILL STATS v4.1+HARD GATE+P0智能门"
+ hooks:
+   - pre_llm_call
+   - pre_tool_call
+-- 
+2.53.0
+

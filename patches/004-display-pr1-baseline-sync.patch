@@ -1,0 +1,57 @@
+From 24b80389f571cb621907a98cd620c74ee48bf78f Mon Sep 17 00:00:00 2001
+From: Love-JourneY <169901027+Love-JourneY@users.noreply.github.com>
+Date: Thu, 11 Jun 2026 00:33:37 +0800
+Subject: [PATCH] refactor(display): consolidate 4 duplicate JSON diff
+ extraction blocks into one
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Applied Nija's minimalist refactoring principles:
+  - min diff: one local set + one if-block replaces 4 repeated blocks
+  - upstream compatible: no new functions, no module-level state
+  - professional: reuses existing patterns (_json_diff_tools is local)
+  - self-documenting: diff clearly shows 4 blocks → 1 consolidated block
+---
+ agent/display.py | 25 +++----------------------
+ 1 file changed, 3 insertions(+), 22 deletions(-)
+
+diff --git a/agent/display.py b/agent/display.py
+index 56b92e4..7c221a2 100644
+--- a/agent/display.py
++++ b/agent/display.py
+@@ -404,28 +404,9 @@ def extract_edit_diff(
+     snapshot: LocalEditSnapshot | None = None,
+ ) -> str | None:
+     """Extract a unified diff from a file-edit tool result."""
+-    if tool_name == "patch" and result:
+-        data = safe_json_loads(result)
+-        if isinstance(data, dict):
+-            diff = data.get("diff")
+-            if isinstance(diff, str) and diff.strip():
+-                return diff
+-
+-    if tool_name == "cronjob" and result:
+-        data = safe_json_loads(result)
+-        if isinstance(data, dict):
+-            diff = data.get("diff")
+-            if isinstance(diff, str) and diff.strip():
+-                return diff
+-
+-    if tool_name == "todo" and result:
+-        data = safe_json_loads(result)
+-        if isinstance(data, dict):
+-            diff = data.get("diff")
+-            if isinstance(diff, str) and diff.strip():
+-                return diff
+-
+-    if tool_name == "memory" and result:
++    # Tools that natively include a 'diff' field in their JSON response.
++    _json_diff_tools = {"patch", "cronjob", "todo", "memory"}
++    if tool_name in _json_diff_tools and result:
+         data = safe_json_loads(result)
+         if isinstance(data, dict):
+             diff = data.get("diff")
+-- 
+2.53.0
+

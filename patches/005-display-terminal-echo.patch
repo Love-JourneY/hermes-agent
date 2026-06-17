@@ -1,0 +1,27 @@
+From b766e4068c097f253940de28b7fd9abbaa97d3f6 Mon Sep 17 00:00:00 2001
+From: Love-JourneY <169901027+Love-JourneY@users.noreply.github.com>
+Date: Thu, 11 Jun 2026 00:52:08 +0800
+Subject: [PATCH] fix(display): sync agent/display.py with PR1 baseline
+
+---
+ agent/display.py | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/agent/display.py b/agent/display.py
+index 8514279..7c221a2 100644
+--- a/agent/display.py
++++ b/agent/display.py
+@@ -404,7 +404,9 @@ def extract_edit_diff(
+     snapshot: LocalEditSnapshot | None = None,
+ ) -> str | None:
+     """Extract a unified diff from a file-edit tool result."""
+-    if tool_name == "patch" and result:
++    # Tools that natively include a 'diff' field in their JSON response.
++    _json_diff_tools = {"patch", "cronjob", "todo", "memory"}
++    if tool_name in _json_diff_tools and result:
+         data = safe_json_loads(result)
+         if isinstance(data, dict):
+             diff = data.get("diff")
+-- 
+2.53.0
+
