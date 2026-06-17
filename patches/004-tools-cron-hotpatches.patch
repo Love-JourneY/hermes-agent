@@ -1,0 +1,315 @@
+diff --git a/cron/jobs.py b/cron/jobs.py
+index 866dacc..ef3975a 100644
+--- a/cron/jobs.py
++++ b/cron/jobs.py
+@@ -827,9 +827,17 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
+         if updated.get("enabled", True) and updated.get("state") != "paused" and not updated.get("next_run_at"):
+             updated["next_run_at"] = compute_next_run(updated["schedule"])
+ 
++        # Capture old prompt for diff when prompt is being updated
++        _prompt_diff = None
++        if "prompt" in updates:
++            _prompt_diff = {"old": job.get("prompt", ""), "new": updates["prompt"]}
++
+         jobs[i] = updated
+         save_jobs(jobs)
+-        return _normalize_job_record(jobs[i])
++        result = _normalize_job_record(jobs[i])
++        if _prompt_diff is not None:
++            result["_prompt_diff"] = _prompt_diff
++        return result
+     return None
+ 
+ 
+diff --git a/tools/cronjob_tools.py b/tools/cronjob_tools.py
+index 3b1c46e..2d3006d 100644
+--- a/tools/cronjob_tools.py
++++ b/tools/cronjob_tools.py
+@@ -545,6 +545,16 @@ def cronjob(
+                 profile=_normalize_optional_job_value(profile),
+                 no_agent=_no_agent,
+             )
++            # Build creation diff (green '+' lines for what was created)
++            created_fields = []
++            if job.get("prompt"):
++                created_fields.append(f"+ prompt: {job['prompt'][:150]}")
++            created_fields.append(f"+ schedule: {job.get('schedule_display', '?')}")
++            created_fields.append(f"+ name: {job.get('name', job['id'])}")
++            if job.get("skills"):
++                created_fields.append(f"+ skills: {', '.join(job['skills'])}")
++            created_fields.append(f"+ deliver: {job.get('deliver', 'local')}")
++
+             return json.dumps(
+                 {
+                     "success": True,
+@@ -558,6 +568,7 @@ def cronjob(
+                     "next_run_at": job["next_run_at"],
+                     "job": _format_job(job),
+                     "message": f"Cron job '{job['name']}' created.",
++                    "diff": "\\n".join(created_fields),
+                 },
+                 indent=2,
+             )
+@@ -609,6 +620,7 @@ def cronjob(
+                         "name": job["name"],
+                         "schedule": job.get("schedule_display"),
+                     },
++                    "diff": f"- name: {job['name']}\n- schedule: {job.get('schedule_display', '?')}\n- id: {job_id}",
+                 },
+                 indent=2,
+             )
+@@ -711,7 +723,14 @@ def cronjob(
+             if not updates:
+                 return tool_error("No updates provided.", success=False)
+             updated = update_job(job_id, updates)
+-            return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
++            result = {"success": True, "job": _format_job(updated)}
++            prompt_diff = updated.get("_prompt_diff")
++            if prompt_diff:
++                result["diff"] = (
++                    f"- prompt: {prompt_diff['old']}\n"
++                    f"+ prompt: {prompt_diff['new']}"
++                )
++            return json.dumps(result, indent=2)
+ 
+         return tool_error(f"Unknown cron action '{action}'", success=False)
+ 
+diff --git a/tools/memory_tool.py b/tools/memory_tool.py
+index a8312fa..46af290 100644
+--- a/tools/memory_tool.py
++++ b/tools/memory_tool.py
+@@ -405,11 +405,15 @@ class MemoryStore:
+                     "usage": f"{current:,}/{limit:,}",
+                 }
+ 
++            old_content = entries[idx]
+             entries[idx] = new_content
+             self._set_entries(target, entries)
+             self.save_to_disk(target)
+ 
+-        return self._success_response(target, "Entry replaced.")
++        return self._success_response(
++            target, "Entry replaced.",
++            diff=f"- {old_content[:200]}\n+ {new_content[:200]}"
++        )
+ 
+     def remove(self, target: str, old_text: str) -> Dict[str, Any]:
+         """Remove the entry containing old_text substring."""
+@@ -441,11 +445,15 @@ class MemoryStore:
+                 # All identical -- safe to remove just the first
+ 
+             idx = matches[0][0]
++            old_content = entries[idx]
+             entries.pop(idx)
+             self._set_entries(target, entries)
+             self.save_to_disk(target)
+ 
+-        return self._success_response(target, "Entry removed.")
++        return self._success_response(
++            target, "Entry removed.",
++            diff=f"- [{len(entries) + 1} entries → {len(entries)}] removed: {old_content[:200]}"
++        )
+ 
+     def format_for_system_prompt(self, target: str) -> Optional[str]:
+         """
+@@ -462,7 +470,7 @@ class MemoryStore:
+ 
+     # -- Internal helpers --
+ 
+-    def _success_response(self, target: str, message: str = None) -> Dict[str, Any]:
++    def _success_response(self, target: str, message: str = None, diff: str = None) -> Dict[str, Any]:
+         entries = self._entries_for(target)
+         current = self._char_count(target)
+         limit = self._char_limit(target)
+@@ -475,6 +483,8 @@ class MemoryStore:
+             "usage": f"{pct}% — {current:,}/{limit:,} chars",
+             "entry_count": len(entries),
+         }
++        if diff:
++            resp["diff"] = diff
+         if message:
+             resp["message"] = message
+         return resp
+diff --git a/tools/skill_manager_tool.py b/tools/skill_manager_tool.py
+index c131db9..5380464 100644
+--- a/tools/skill_manager_tool.py
++++ b/tools/skill_manager_tool.py
+@@ -720,6 +720,7 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
+     return {
+         "success": True,
+         "message": message,
++        "diff": f"- skill: {name}\n- path: {skill_dir}",
+     }
+ 
+ 
+@@ -815,6 +816,7 @@ def _remove_file(name: str, file_path: str) -> Dict[str, Any]:
+     return {
+         "success": True,
+         "message": f"File '{file_path}' removed from skill '{name}'.",
++        "diff": f"- {file_path} (from skill: {name})",
+     }
+ 
+ 
+diff --git a/tools/todo_tool.py b/tools/todo_tool.py
+index 960dab6..cdd5554 100644
+--- a/tools/todo_tool.py
++++ b/tools/todo_tool.py
+@@ -204,9 +204,32 @@ def todo_tool(
+         return tool_error("TodoStore not initialized")
+ 
+     if todos is not None:
++        old_items = {i["id"]: dict(i) for i in store.read()} if merge else {}
+         items = store.write(todos, merge)
++        # Build diff for write operations
++        diff_lines = []
++        if merge:
++            for item in items:
++                iid = item["id"]
++                old = old_items.get(iid)
++                if old is None:
++                    diff_lines.append(f"+ [{item['status']}] {item['content']}")
++                elif old["status"] != item["status"]:
++                    diff_lines.append(f"- [{old['status']}] {old['content']}")
++                    diff_lines.append(f"+ [{item['status']}] {item['content']}")
++                elif old["content"] != item["content"]:
++                    diff_lines.append(f"- [{old['status']}] {old['content']}")
++                    diff_lines.append(f"+ [{item['status']}] {item['content']}")
++            # Detect removed items
++            new_ids = {i["id"] for i in items}
++            for oid, old in old_items.items():
++                if oid not in new_ids:
++                    diff_lines.append(f"- [{old['status']}] {old['content']}")
++        elif len(items) > 0:
++            diff_lines = [f"+ [{i['status']}] {i['content']}" for i in items]
+     else:
+         items = store.read()
++        diff_lines = []
+ 
+     # Build summary counts
+     pending = sum(1 for i in items if i["status"] == "pending")
+@@ -214,7 +237,7 @@ def todo_tool(
+     completed = sum(1 for i in items if i["status"] == "completed")
+     cancelled = sum(1 for i in items if i["status"] == "cancelled")
+ 
+-    return json.dumps({
++    result = {
+         "todos": items,
+         "summary": {
+             "total": len(items),
+@@ -223,7 +246,10 @@ def todo_tool(
+             "completed": completed,
+             "cancelled": cancelled,
+         },
+-    }, ensure_ascii=False)
++    }
++    if diff_lines:
++        result["diff"] = "\\n".join(diff_lines)
++    return json.dumps(result, ensure_ascii=False)
+ 
+ 
+ def check_todo_requirements() -> bool:
+diff --git a/tools/web_tools.py b/tools/web_tools.py
+index d8d922d..61609af 100644
+--- a/tools/web_tools.py
++++ b/tools/web_tools.py
+@@ -102,7 +102,7 @@ from tools.tool_backend_helpers import (  # noqa: F401
+     nous_tool_gateway_unavailable_message,
+     prefers_gateway,
+ )
+-from tools.url_safety import async_is_safe_url, normalize_url_for_request
++from tools.url_safety import async_is_safe_url
+ import sys
+ 
+ logger = logging.getLogger(__name__)
+@@ -110,28 +110,9 @@ logger = logging.getLogger(__name__)
+ 
+ # ─── Backend Selection ────────────────────────────────────────────────────────
+ 
+-def _env_value(name: str) -> str:
+-    """Resolve ``name`` via Hermes config-aware env, falling back to process env.
+-
+-    Mirrors the SearXNG provider's ``_searxng_url()`` so that values set
+-    through Hermes' config/.env layer (``hermes config set``, ``hermes tools``)
+-    are honored here too — not just raw process-env exports. Without this,
+-    a config-only ``SEARXNG_URL`` (or any provider key) leaves the backend
+-    auto-detect cascade and ``check_web_api_key()`` blind to it. See #34290.
+-    """
+-    try:
+-        from hermes_cli.config import get_env_value
+-
+-        val = get_env_value(name)
+-    except Exception:
+-        val = None
+-    if val is None:
+-        val = os.getenv(name, "")
+-    return (val or "").strip()
+-
+-
+ def _has_env(name: str) -> bool:
+-    return bool(_env_value(name))
++    val = os.getenv(name)
++    return bool(val and val.strip())
+ 
+ def _load_web_config() -> dict:
+     """Load the ``web:`` section from ~/.hermes/config.yaml."""
+@@ -921,25 +902,17 @@ async def web_extract_tool(
+     # URL-decode first so percent-encoded secrets (%73k- = sk-) are caught.
+     from agent.redact import _PREFIX_RE
+     from urllib.parse import unquote
+-    normalized_urls: List[str] = []
+     for _url in urls:
+-        normalized_url = normalize_url_for_request(_url)
+-        if (
+-            _PREFIX_RE.search(_url)
+-            or _PREFIX_RE.search(unquote(_url))
+-            or _PREFIX_RE.search(normalized_url)
+-            or _PREFIX_RE.search(unquote(normalized_url))
+-        ):
++        if _PREFIX_RE.search(_url) or _PREFIX_RE.search(unquote(_url)):
+             return json.dumps({
+                 "success": False,
+                 "error": "Blocked: URL contains what appears to be an API key or token. "
+                          "Secrets must not be sent in URLs.",
+             })
+-        normalized_urls.append(normalized_url)
+ 
+     debug_call_data = {
+         "parameters": {
+-            "urls": normalized_urls,
++            "urls": urls,
+             "format": format,
+             "use_llm_processing": use_llm_processing,
+             "model": model,
+@@ -955,12 +928,12 @@ async def web_extract_tool(
+     }
+     
+     try:
+-        logger.info("Extracting content from %d URL(s)", len(normalized_urls))
++        logger.info("Extracting content from %d URL(s)", len(urls))
+ 
+         # ── SSRF protection — filter out private/internal URLs before any backend ──
+         safe_urls = []
+         ssrf_blocked: List[Dict[str, Any]] = []
+-        for url in normalized_urls:
++        for url in urls:
+             if not await async_is_safe_url(url):
+                 ssrf_blocked.append({
+                     "url": url, "title": "", "content": "",
+@@ -1141,7 +1114,7 @@ async def web_extract_tool(
+                 "url": r.get("url", ""),
+                 "title": r.get("title", ""),
+                 "content": r.get("content", ""),
+-                "error": r.get("error"),
++                **({"error": r["error"]} if r.get("error") else {}),
+                 **({  "blocked_by_policy": r["blocked_by_policy"]} if "blocked_by_policy" in r else {}),
+             }
+             for r in response.get("results", [])
+@@ -1223,7 +1196,7 @@ if __name__ == "__main__":
+         elif backend == "tavily":
+             print("   Using Tavily API (https://tavily.com)")
+         elif backend == "searxng":
+-            print(f"   Using SearXNG (search only): {_env_value('SEARXNG_URL')}")
++            print(f"   Using SearXNG (search only): {os.getenv('SEARXNG_URL', '').strip()}")
+         elif backend == "brave-free":
+             print("   Using Brave Search free tier (search only)")
+         elif backend == "ddgs":

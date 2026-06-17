@@ -1,0 +1,70 @@
+From 4a8dc8e608063463545c6387b23df2bd17dcb772 Mon Sep 17 00:00:00 2001
+From: Love-JourneY <169901027+Love-JourneY@users.noreply.github.com>
+Date: Wed, 17 Jun 2026 00:47:40 +0800
+Subject: [PATCH] =?UTF-8?q?fix(provider):=20increase=20model=20listing=20t?=
+ =?UTF-8?q?imeout=203s/5s/8s=E2=86=9215s=20for=20slow=20APIs?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Hermes had multiple hardcoded timeouts for /v1/models and context_length
+probes. Slow APIs (智谱/硅基流动/Modal ~6-9s) consistently timed out,
+causing the model picker to show 0 models.
+
+Changes:
+- probe_api_models() default: 5.0→15.0 (model picker listing)
+- fetch_api_models() default: 5.0→15.0 (model picker listing)
+- _query_local_context_length(): 3.0→15.0 (model context resolution)
+- ollama cloud discovery: 8.0→15.0
+---
+ agent/model_metadata.py | 2 +-
+ hermes_cli/models.py    | 6 +++---
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/agent/model_metadata.py b/agent/model_metadata.py
+index 531e9ae..bc23663 100644
+--- a/agent/model_metadata.py
++++ b/agent/model_metadata.py
+@@ -1194,7 +1194,7 @@ def _query_local_context_length(model: str, base_url: str, api_key: str = "") ->
+         server_type = None
+ 
+     try:
+-        with httpx.Client(timeout=3.0, headers=headers) as client:
++        with httpx.Client(timeout=15.0, headers=headers) as client:
+             # Ollama: /api/show returns model details with context info
+             if server_type == "ollama":
+                 resp = client.post(f"{server_url}/api/show", json={"name": model})
+diff --git a/hermes_cli/models.py b/hermes_cli/models.py
+index b9b3c81..c048ec2 100644
+--- a/hermes_cli/models.py
++++ b/hermes_cli/models.py
+@@ -3199,7 +3199,7 @@ def github_model_reasoning_efforts(
+ def probe_api_models(
+     api_key: Optional[str],
+     base_url: Optional[str],
+-    timeout: float = 5.0,
++    timeout: float = 15.0,
+     api_mode: Optional[str] = None,
+ ) -> dict[str, Any]:
+     """Probe a ``/models`` endpoint with light URL heuristics.
+@@ -3277,7 +3277,7 @@ def probe_api_models(
+ def fetch_api_models(
+     api_key: Optional[str],
+     base_url: Optional[str],
+-    timeout: float = 5.0,
++    timeout: float = 15.0,
+     api_mode: Optional[str] = None,
+ ) -> Optional[list[str]]:
+     """Fetch the list of available model IDs from the provider's ``/models`` endpoint.
+@@ -3384,7 +3384,7 @@ def fetch_ollama_cloud_models(
+ 
+     live_models: list[str] = []
+     if api_key:
+-        result = fetch_api_models(api_key, base_url, timeout=8.0)
++        result = fetch_api_models(api_key, base_url, timeout=15.0)
+         if result:
+             live_models = result
+ 
+-- 
+2.53.0
+
