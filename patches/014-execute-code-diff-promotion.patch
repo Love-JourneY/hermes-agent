@@ -1,0 +1,54 @@
+From 8ae0c07d09abc55b4dd71cdb846e9ea2c0fe2f1b Mon Sep 17 00:00:00 2001
+From: Love-JourneY <169901027+Love-JourneY@users.noreply.github.com>
+Date: Wed, 17 Jun 2026 16:01:33 +0800
+Subject: [PATCH] fix(execute_code): diff rendering -- _json_diff_tools +
+ internal tool diff promotion
+
+---
+ agent/display.py             |  2 +-
+ tools/code_execution_tool.py | 16 ++++++++++++++++
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/agent/display.py b/agent/display.py
+index 2e6e198..2763c61 100644
+--- a/agent/display.py
++++ b/agent/display.py
+@@ -405,7 +405,7 @@ def extract_edit_diff(
+ ) -> str | None:
+     """Extract a unified diff from a file-edit tool result."""
+     # Tools that natively include a 'diff' field in their JSON response.
+-    _json_diff_tools = {"patch", "cronjob", "todo", "memory"}
++    _json_diff_tools = {"patch", "cronjob", "todo", "memory", "execute_code"}
+     if tool_name in _json_diff_tools and result:
+         data = safe_json_loads(result)
+         if isinstance(data, dict):
+diff --git a/tools/code_execution_tool.py b/tools/code_execution_tool.py
+index 40581e5..e4987a3 100644
+--- a/tools/code_execution_tool.py
++++ b/tools/code_execution_tool.py
+@@ -1440,6 +1440,22 @@ def execute_code(
+         if status == "timeout":
+             timeout_msg = f"Script timed out after {timeout}s and was killed."
+             result["error"] = timeout_msg
++
++        # Promote diffs from internal tool calls to top level
++        # so display.py can render them as red/green diff in TUI.
++        if tool_call_log:
++            import json as _j
++            _diffs = []
++            for _call in tool_call_log:
++                try:
++                    _raw = _call.get("result", "{}")
++                    _cr = _j.loads(_raw) if isinstance(_raw, str) else (_raw or {})
++                    if _cr.get("diff"):
++                        _diffs.append(_cr["diff"])
++                except Exception:
++                    pass
++            if _diffs:
++                result["diff"] = "\n".join(_diffs)
+             # Include timeout message in output so the LLM always surfaces it
+             # to the user.  When output is empty, models often treat the result
+             # as "nothing happened" and produce an empty response, which the
+-- 
+2.53.0
+
