@@ -405,7 +405,7 @@ def extract_edit_diff(
 ) -> str | None:
     """Extract a unified diff from a file-edit tool result."""
     # Tools that natively include a 'diff' field in their JSON response.
-    _json_diff_tools = {"patch", "cronjob", "todo", "memory"}
+    _json_diff_tools = {"patch", "cronjob", "todo", "memory", "execute_code"}
     if tool_name in _json_diff_tools and result:
         data = safe_json_loads(result)
         if isinstance(data, dict):
