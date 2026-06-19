@@ -1440,22 +1440,6 @@ def execute_code(
         if status == "timeout":
             timeout_msg = f"Script timed out after {timeout}s and was killed."
             result["error"] = timeout_msg
-
-        # Promote diffs from internal tool calls to top level
-        # so display.py can render them as red/green diff in TUI.
-        if tool_call_log:
-            import json as _j
-            _diffs = []
-            for _call in tool_call_log:
-                try:
-                    _raw = _call.get("result", "{}")
-                    _cr = _j.loads(_raw) if isinstance(_raw, str) else (_raw or {})
-                    if _cr.get("diff"):
-                        _diffs.append(_cr["diff"])
-                except Exception:
-                    pass
-            if _diffs:
-                result["diff"] = "\n".join(_diffs)
             # Include timeout message in output so the LLM always surfaces it
             # to the user.  When output is empty, models often treat the result
             # as "nothing happened" and produce an empty response, which the
