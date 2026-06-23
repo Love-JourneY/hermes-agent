@@ -10,14 +10,11 @@ _tool_call_counter = 0; _call_results = {}; _call_lock = threading.Lock(); _ACTI
 _HFC_PATCHED = False; _orig_hfc = None
 
 def _ensure_hfc():
-    """Lazy-patch handle_function_call — no import (use sys.modules)."""
     global _HFC_PATCHED, _orig_hfc
     if _HFC_PATCHED: return True
-    if "model_tools" not in sys.modules:
-        return False
+    if "model_tools" not in sys.modules: return False
     try:
-        m = sys.modules["model_tools"]
-        o = getattr(m, "handle_function_call", None)
+        m = sys.modules["model_tools"]; o = getattr(m, "handle_function_call", None)
         if o is None: return False
         _orig_hfc = o; _originals["hfc"] = o
         @functools.wraps(o)
@@ -27,9 +24,8 @@ def _ensure_hfc():
             with _call_lock: _tool_call_counter += 1; _call_results[_tool_call_counter] = r
             return r
         m.handle_function_call = _patched_hfc
-        _HFC_PATCHED = True; _log.debug("P3 applied lazily"); return True
-    except Exception as e:
-        _log.warning("P3 lazy: %s", e); return False
+        _HFC_PATCHED = True; _log.debug("P3 applied"); return True
+    except Exception as e: _log.warning("P3 lazy: %s", e); return False
 
 def apply():
     global _applied
@@ -55,10 +51,9 @@ def apply():
                 return "\n".join(p)
             a._format_execute_code_result = f
     except: pass
-    # P3: lazy — defer to _ensure_hfc()
     try:
         import model_tools as m
-        if not _ensure_hfc(): _log.warning("P3 deferred (model_tools not ready)")
+        if not _ensure_hfc(): _log.warning("P3 deferred")
     except Exception as e: _log.warning("P3 init: %s", e)
     try:
         import tools.code_execution_tool as c
@@ -98,10 +93,10 @@ def apply():
         if hasattr(c,"execute_code"):
             o=c.execute_code; _originals["ec"]=o
             @functools.wraps(o)
-            def p6(code,task_id=None,enabled_tools=None):
+            def p6(*a, **kw):
                 global _ACTIVE_CALL_LOG,_tool_call_counter,_call_results
                 _ACTIVE_CALL_LOG=[];_tool_call_counter=0;_call_results={}
-                rj=o(code,task_id=task_id,enabled_tools=enabled_tools)
+                rj=o(*a, **kw)
                 if _ACTIVE_CALL_LOG:
                     try:
                         r=json.loads(rj) if isinstance(rj,str) else rj
