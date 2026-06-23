@@ -1,7 +1,7 @@
 """exec_code_diff — monkey-patch execute_code diff 渲染
 P1-P6: handle_function_call TLS + counter-based result injection + diff promotion
 """
-import logging, functools, json, threading
+import logging, functools, json, threading, sys
 NAME = "exec_code_diff"
 DESCRIPTION = "execute_code 内部 diff 渲染到 TUI"
 _log = logging.getLogger("hermes-local-patches")
@@ -10,11 +10,13 @@ _tool_call_counter = 0; _call_results = {}; _call_lock = threading.Lock(); _ACTI
 _HFC_PATCHED = False; _orig_hfc = None
 
 def _ensure_hfc():
-    """Lazy-patch handle_function_call when model_tools is ready."""
+    """Lazy-patch handle_function_call — no import (use sys.modules)."""
     global _HFC_PATCHED, _orig_hfc
     if _HFC_PATCHED: return True
+    if "model_tools" not in sys.modules:
+        return False
     try:
-        import model_tools as m
+        m = sys.modules["model_tools"]
         o = getattr(m, "handle_function_call", None)
         if o is None: return False
         _orig_hfc = o; _originals["hfc"] = o
