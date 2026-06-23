@@ -1067,6 +1067,7 @@ def execute_code(
     code: str,
     task_id: Optional[str] = None,
     enabled_tools: Optional[List[str]] = None,
+    *args, **kwargs
 ) -> str:
     """
     Run a Python script in a sandboxed child process with RPC access
