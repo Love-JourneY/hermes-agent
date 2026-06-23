@@ -1,0 +1,8 @@
+name: hermes-local-patches
+version: 1.0.0
+description: >-
+  Runtime monkey-patch modules replacing all 16 local hotpatches.
+  Zero disk modification — every patch is a pure Python runtime injection.
+  On upstream update: restart gateway → preflight_check → auto-detect conflicts.
+hooks:
+  - pre_tool_call
